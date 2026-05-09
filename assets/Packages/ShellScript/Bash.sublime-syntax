@@ -251,7 +251,7 @@ contexts:
     - match: \bdoas{{keyword_boundary_end}}
       scope: meta.function-call.shell variable.function.shell
       set:
-        - match: '(({{start_of_short_option}})[a-zA-Z&&[^aCu]]*[aCu])\s*'
+        - match: '(({{start_of_short_option}})[\w&&[^aCu]]*[aCu])\s*'
           captures:
             1: variable.parameter.option.shell
             2: punctuation.definition.parameter.shell
@@ -261,12 +261,12 @@ contexts:
     - match: \benv{{keyword_boundary_end}}
       scope: meta.function-call.shell variable.function.shell
       set:
-        - match: '(({{start_of_short_option}})[a-zA-Z&&[^CPuS]]*[CPu])\s*'
+        - match: '(({{start_of_short_option}})[\w&&[^CPuS]]*[CPu])\s*'
           captures:
             1: variable.parameter.option.shell
             2: punctuation.definition.parameter.shell
           push: single-argument
-        - match: '(({{start_of_short_option}})[a-zA-Z&&[^CPuS]]*S)\s*(?!-)'
+        - match: '(({{start_of_short_option}})[\w&&[^CPuS]]*S)\s*(?!-)'
           captures:
             1: variable.parameter.option.shell
             2: punctuation.definition.parameter.shell
@@ -284,7 +284,7 @@ contexts:
     - match: \bnice{{keyword_boundary_end}}
       scope: meta.function-call.shell variable.function.shell
       set:
-        - match: '(({{start_of_short_option}})[a-zA-Z&&[^n]]*[n])\s*'
+        - match: '(({{start_of_short_option}})[\w&&[^n]]*[n])\s*'
           captures:
             1: variable.parameter.option.shell
             2: punctuation.definition.parameter.shell
@@ -459,12 +459,12 @@ contexts:
 
   # all options of `sudo` and `sudoedit` except for `-e`
   precommand-sudo-options-no-edit:
-    - match: '(({{start_of_short_option}})[a-zA-Z&&[^CDghpRrTtUu]]*[CDgpRrTtUu])\s*'
+    - match: '(({{start_of_short_option}})[\w&&[^CDghpRrTtUu]]*[CDgpRrTtUu])\s*'
       captures:
         1: variable.parameter.option.shell
         2: punctuation.definition.parameter.shell
       push: single-argument
-    - match: '(({{start_of_short_option}})[a-zA-Z&&[^CDghpRrTtUu]]*h)\s*(?!-)'
+    - match: '(({{start_of_short_option}})[\w&&[^CDghpRrTtUu]]*h)\s*(?!-)'
       captures:
         1: variable.parameter.option.shell
         2: punctuation.definition.parameter.shell
