@@ -1,6 +1,6 @@
 use std::{env, fs::DirBuilder, os::unix::fs::DirBuilderExt, path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{MapAccess, Visitor, value::MapAccessDeserializer},
@@ -359,6 +359,54 @@ pub struct PrecommandConfig {
     /// mode switch. Defaults to an empty list.
     #[serde(default)]
     pub options: Vec<PrecommandOption>,
+}
+
+impl HighlightingConfig {
+    /// Checks the `precommands` list for configuration errors that would
+    /// prevent highlighting from working correctly.
+    pub fn validate(&self) -> Result<()> {
+        let mut seen_names = std::collections::HashSet::new();
+        for precommand in &self.precommands {
+            if precommand.name.is_empty() {
+                bail!("precommand name must not be empty");
+            }
+
+            if !seen_names.insert(precommand.name.as_str()) {
+                bail!("duplicate precommand name: {:?}", precommand.name);
+            }
+
+            for option in &precommand.options {
+                if option.short.is_none() && option.long.is_none() {
+                    bail!(
+                        "precommand {:?}: option must have at least one of `short` or `long`",
+                        precommand.name
+                    );
+                }
+
+                if let Some(short) = &option.short
+                    && (short.len() != 1
+                        || !short.chars().next().is_some_and(|c| c.is_alphanumeric()))
+                {
+                    bail!(
+                        "precommand {:?}: short option {:?} must be a single ASCII letter, digit, or underscore",
+                        precommand.name,
+                        short
+                    );
+                }
+
+                if let Some(long) = &option.long
+                    && long.is_empty()
+                {
+                    bail!(
+                        "precommand {:?}: long option must not be empty",
+                        precommand.name
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Returns the path to the configuration file if it exists. The configuration
