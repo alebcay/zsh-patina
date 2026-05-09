@@ -1,0 +1,8 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"sudo2 ls\")?"
+---
+sudo2 ls
+
+0  5  `sudo2`  CALLABLE `sudo2`
+6  8  `ls`     CALLABLE `ls`

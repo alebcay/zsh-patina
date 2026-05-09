@@ -1,0 +1,16 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"doas2 -n -u root -C doas.conf ls\")?"
+---
+doas2 -n -u root -C doas.conf ls
+
+0   5   `doas2`      CALLABLE `doas2`
+5   7   ` -`         punctuation.definition.parameter
+7   8   `n`          variable.parameter.option
+8   10  ` -`         punctuation.definition.parameter
+10  11  `u`          variable.parameter.option
+12  16  `root`       meta.function-call.arguments
+16  18  ` -`         punctuation.definition.parameter
+18  19  `C`          variable.parameter.option
+20  29  `doas.conf`  meta.function-call.arguments
+30  32  `ls`         CALLABLE `ls`

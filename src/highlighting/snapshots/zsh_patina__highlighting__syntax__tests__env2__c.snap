@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"env2 -C mydir env2\")?"
+---
+env2 -C mydir env2
+
+0   4   `env2`   CALLABLE `env2`
+4   6   ` -`     punctuation.definition.parameter
+6   7   `C`      variable.parameter.option
+8   13  `mydir`  meta.function-call.arguments + dynamic.path.directory.complete
+14  18  `env2`   CALLABLE `env2`

@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"zap2 -p pipedir arg1\")?"
+---
+zap2 -p pipedir arg1
+
+0   4   `zap2`     CALLABLE `zap2`
+4   6   ` -`       punctuation.definition.parameter
+6   7   `p`        variable.parameter.option
+8   15  `pipedir`  meta.function-call.arguments + dynamic.path.directory.complete
+15  20  ` arg1`    meta.function-call.arguments

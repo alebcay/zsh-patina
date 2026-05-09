@@ -1,0 +1,12 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"env2 --unset=_ env2\")?"
+---
+env2 --unset=_ env2
+
+0   4   `env2`   CALLABLE `env2`
+4   7   ` --`    punctuation.definition.parameter
+7   12  `unset`  variable.parameter.option
+12  13  `=`      keyword.operator.assignment.option
+13  14  `_`      meta.function-call.arguments
+15  19  `env2`   CALLABLE `env2`

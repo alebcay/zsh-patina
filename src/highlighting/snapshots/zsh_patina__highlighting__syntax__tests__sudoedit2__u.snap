@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"sudoedit2 -u root file1\")?"
+---
+sudoedit2 -u root file1
+
+0   9   `sudoedit2`  CALLABLE `sudoedit2`
+9   11  ` -`         punctuation.definition.parameter
+11  12  `u`          variable.parameter.option
+12  18  ` root `     meta.function-call.arguments
+18  23  `file1`      meta.function-call.arguments + dynamic.path.file.complete

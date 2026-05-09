@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"sudo2 --chdir mydir ls\")?"
+---
+sudo2 --chdir mydir ls
+
+0   5   `sudo2`  CALLABLE `sudo2`
+5   8   ` --`    punctuation.definition.parameter
+8   13  `chdir`  variable.parameter.option
+14  19  `mydir`  meta.function-call.arguments + dynamic.path.directory.complete
+20  22  `ls`     CALLABLE `ls`

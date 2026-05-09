@@ -3,6 +3,7 @@ use std::ops::Range;
 mod dynamic;
 mod highlighter;
 mod historyexpansion;
+mod syntax;
 
 pub use highlighter::{Highlighter, HighlighterBuilder, HighlightingRequest};
 
@@ -22,19 +23,20 @@ const DYNAMIC_CALLABLE_FUNCTION: &str = "dynamic.callable.function.shell";
 const DYNAMIC_CALLABLE_MISSING: &str = "dynamic.callable.missing.shell";
 
 const EXPANSION_HISTORY: &str = "meta.group.expansion.history.shell";
+const FUNCTION_CALL: &str = "meta.function-call.shell";
 
 const CHARACTER_ESCAPE: &str = "constant.character.escape.shell";
-const TILDE_VARIABLE: &str = "variable.language.tilde.shell";
-const TILDE_META: &str = "meta.group.expansion.tilde";
-
+const PARAMETER_OPTION: &str = "variable.parameter.option.shell";
+const PUNCTUATION_PARAMETER: &str = "punctuation.definition.parameter.shell";
+const REDIRECTION: &str = "keyword.operator.assignment.redirection.shell";
 const STRING_QUOTED_SINGLE: &str = "string.quoted.single.shell";
 const STRING_QUOTED_SINGLE_ANSI: &str = "string.quoted.single.ansi-c.shell";
 const STRING_QUOTED_DOUBLE: &str = "string.quoted.double.shell";
 const STRING_QUOTED_BEGIN: &str = "punctuation.definition.string.begin.shell";
 const STRING_QUOTED_END: &str = "punctuation.definition.string.end.shell";
 const STRING_UNQUOTED_HEREDOC: &str = "string.unquoted.heredoc.shell";
-
-const REDIRECTION: &str = "keyword.operator.assignment.redirection.shell";
+const TILDE_VARIABLE: &str = "variable.language.tilde.shell";
+const TILDE_META: &str = "meta.group.expansion.tilde";
 
 /// A span of text with a foreground color. The range is specified in terms of
 /// character indices, not byte indices.

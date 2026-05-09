@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"zap2 --format json ls\")?"
+---
+zap2 --format json ls
+
+0   4   `zap2`    CALLABLE `zap2`
+4   7   ` --`     punctuation.definition.parameter
+7   13  `format`  variable.parameter.option
+14  18  `json`    meta.function-call.arguments
+19  21  `ls`      CALLABLE `ls`

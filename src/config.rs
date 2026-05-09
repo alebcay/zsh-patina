@@ -77,6 +77,14 @@ pub struct HighlightingConfig {
         deserialize_with = "deserialize_duration_ms"
     )]
     pub timeout: Duration,
+
+    /// A list of custom precommands to recognise in addition to the built-in
+    /// ones (`sudo`, `env`, `nohup`, `nice`, and others). Each entry describes
+    /// the precommand's name, the mode used to highlight what follows, and the
+    /// options it accepts. Defaults to an empty list.
+    ///
+    /// See [`PrecommandConfig`] for details and a configuration example.
+    pub precommands: Vec<PrecommandConfig>,
 }
 
 fn serialize_duration_ms<S: Serializer>(duration: &Duration, s: S) -> Result<S::Ok, S::Error> {
@@ -95,6 +103,7 @@ impl Default for HighlightingConfig {
             dynamic: DynamicConfig::default(),
             max_line_length: 20000,
             timeout: Duration::from_millis(500),
+            precommands: Vec::new(),
         }
     }
 }
@@ -240,6 +249,116 @@ impl<'de> Deserialize<'de> for DynamicConfig {
 
         deserializer.deserialize_any(DynamicConfigVisitor)
     }
+}
+
+/// Controls how zsh-patina highlights the word that follows a precommand's
+/// options.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PrecommandMode {
+    /// The next word is treated as a callable -- a command, alias, function, or
+    /// builtin -- and highlighting continues as if that callable were at the
+    /// start of the line. This is the default and is appropriate for
+    /// precommands such as `sudo` or `env` that prefix another command.
+    #[default]
+    Default,
+
+    /// The remaining words are treated as plain arguments rather than a
+    /// callable followed by its arguments. This is appropriate for precommands
+    /// such as `sudoedit` that take file names instead of a command to run.
+    Arguments,
+}
+
+/// Specifies the mode to switch to after a particular option has been
+/// processed.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrecommandSwitchTo {
+    /// After the option (and its argument, if any) has been consumed, the
+    /// remaining words are treated as plain arguments rather than a callable
+    /// followed by its arguments. This is analogous to `sudo`'s `-e`/`--edit`
+    /// option, which causes `sudo` to behave like `sudoedit`.
+    Arguments,
+}
+
+/// Specifies whether an option takes an argument, and if so, whether it is
+/// required.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PrecommandArg {
+    /// The option must be followed by an argument. The argument is consumed
+    /// before highlighting continues. This is the default.
+    #[default]
+    Required,
+
+    /// The option may be followed by an argument. Whether the next word is
+    /// treated as an argument or as the start of the command depends on
+    /// context.
+    Optional,
+
+    /// The option takes no argument.
+    None,
+}
+
+/// Describes a single option accepted by a precommand.
+///
+/// At least one of `short` or `long` should be set. Both may be set if the
+/// option has both a short and a long form.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PrecommandOption {
+    /// The short form of the option, without the leading dash (e.g. `"u"` for
+    /// `-u`).
+    pub short: Option<String>,
+
+    /// The long form of the option, without the leading dashes (e.g. `"user"`
+    /// for `--user`).
+    pub long: Option<String>,
+
+    /// Whether this option takes an argument, and if so, whether the argument
+    /// is required or optional. Defaults to [`PrecommandArg::Required`].
+    #[serde(default)]
+    pub arg: PrecommandArg,
+
+    /// If set, switches the highlighting mode after this option (and its
+    /// argument, if any) has been consumed. This is useful for options that
+    /// fundamentally change the nature of the remaining arguments, such as
+    /// `sudo`'s `-e`/`--edit` option.
+    pub switch_to_mode: Option<PrecommandSwitchTo>,
+}
+
+/// Configures a custom precommand — a command that, when followed by another
+/// command or arguments, causes zsh-patina to highlight the subsequent words in
+/// a specific way. Examples of built-in precommands include `sudo`, `env`, and
+/// `nohup`.
+///
+/// Custom precommands can be added to the `precommands` list in the
+/// `[highlighting]` section of the configuration file. For example:
+///
+/// ```toml
+/// [[highlighting.precommands]]
+/// name = "mywrapper"
+/// options = [
+///     { short = "u", long = "user", arg = "required" },
+///     { short = "n", arg = "none" },
+/// ]
+/// ```
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrecommandConfig {
+    /// The name of the precommand as it appears in the shell
+    pub name: String,
+
+    /// Controls how the word following the precommand's options is highlighted.
+    /// Defaults to [`PrecommandMode::Default`].
+    #[serde(default)]
+    pub mode: PrecommandMode,
+
+    /// The options that the precommand accepts before the command or arguments.
+    /// Each entry describes one option, its argument behavior, and an optional
+    /// mode switch. Defaults to an empty list.
+    #[serde(default)]
+    pub options: Vec<PrecommandOption>,
 }
 
 /// Returns the path to the configuration file if it exists. The configuration

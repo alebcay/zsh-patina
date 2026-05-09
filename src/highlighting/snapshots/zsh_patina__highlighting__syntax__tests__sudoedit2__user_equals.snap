@@ -1,0 +1,12 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"sudoedit2 --user=root file1\")?"
+---
+sudoedit2 --user=root file1
+
+0   9   `sudoedit2`  CALLABLE `sudoedit2`
+9   12  ` --`        punctuation.definition.parameter
+12  16  `user`       variable.parameter.option
+16  17  `=`          keyword.operator.assignment.option
+17  22  `root `      meta.function-call.arguments
+22  27  `file1`      meta.function-call.arguments + dynamic.path.file.complete

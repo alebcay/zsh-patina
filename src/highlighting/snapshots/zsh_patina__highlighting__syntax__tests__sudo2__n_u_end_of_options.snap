@@ -1,0 +1,14 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"sudo2 -n -u root -- ls\")?"
+---
+sudo2 -n -u root -- ls
+
+0   5   `sudo2`  CALLABLE `sudo2`
+5   7   ` -`     punctuation.definition.parameter
+7   8   `n`      variable.parameter.option
+8   10  ` -`     punctuation.definition.parameter
+10  11  `u`      variable.parameter.option
+12  16  `root`   meta.function-call.arguments
+16  19  ` --`    keyword.operator.end-of-options
+20  22  `ls`     CALLABLE `ls`

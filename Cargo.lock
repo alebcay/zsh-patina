@@ -3394,6 +3394,7 @@ dependencies = [
  "log",
  "pretty_assertions",
  "rayon",
+ "regex-syntax",
  "rustc-hash",
  "serde",
  "shellexpand",
