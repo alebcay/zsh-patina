@@ -69,10 +69,16 @@ impl ExtendedSyntaxSetBuilder {
                     || o.arg == PrecommandArg::Required
                     || o.arg == PrecommandArg::Optional
                 {
-                    exclude.push_str(short);
+                    // protect against regex injections
+                    let name = regex_syntax::escape(short);
+
+                    exclude.push_str(&name);
                 }
                 if is_matching {
-                    matching.push((short, o));
+                    // protect against regex injections
+                    let name = regex_syntax::escape(short);
+
+                    matching.push((name, o));
                 }
             }
         }
@@ -104,7 +110,7 @@ impl ExtendedSyntaxSetBuilder {
                     // options except our exceptions, followed by a single
                     // option taking a *required* argument
                     let regex_str_required =
-                        format!(r#"(({START_OF_SHORT_OPTION})[\w&&[^{exclude}]]*{name})\s*"#,);
+                        format!(r#"(({START_OF_SHORT_OPTION})[\w&&[^{exclude}]]*{name})\s*"#);
 
                     let operation = if needs_switch {
                         MatchOperation::Set(vec![
@@ -235,7 +241,10 @@ impl ExtendedSyntaxSetBuilder {
                     None => !switching,
                 };
                 if is_matching {
-                    matching.push((long, o));
+                    // protect against regex injections
+                    let name = regex_syntax::escape(long);
+
+                    matching.push((name, o));
                 }
             }
         }
@@ -456,7 +465,7 @@ impl ExtendedSyntaxSetBuilder {
             false,
             format!(
                 r#"\b{}{KEYWORD_BOUNDARY_END}"#,
-                regex_syntax::escape(&config.name),
+                regex_syntax::escape(&config.name), // protect against regex injections
             ),
             vec![
                 Scope::new(FUNCTION_CALL).unwrap(),
@@ -835,6 +844,55 @@ mod tests {
         assert_snapshot!("zap2__v_p_no_arg", cfg.highlight("zap2 -v -p arg1")?);
         assert_snapshot!("zap2__vp_no_arg", cfg.highlight("zap2 -vp arg1")?);
         assert_snapshot!("zap2__vp_arg", cfg.highlight("zap2 -vp pipedir arg1")?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn regex_injection() -> Result<()> {
+        let cfg = test_cfg_with_precommands(vec![PrecommandConfig {
+            name: "foo.+".to_string(),
+            mode: PrecommandMode::Default,
+            options: vec![
+                PrecommandOption {
+                    long: Some("bar.+".to_string()),
+                    ..Default::default()
+                },
+                PrecommandOption {
+                    short: Some("]".to_string()),
+                    ..Default::default()
+                },
+            ],
+        }])?;
+
+        // `ls` must not be highlighted as a callable
+        assert_snapshot!(
+            "regex_injection__foobar",
+            cfg.highlight("foobar --other ls")?
+        );
+
+        // `ls` should be highlighted as a callable
+        assert_snapshot!(
+            "regex_injection__foo_dot_plus",
+            cfg.highlight("foo.+ --other ls")?
+        );
+
+        // `--barrel` should be a normal option and `cat` should be a callable
+        assert_snapshot!(
+            "regex_injection__foo_barrel",
+            cfg.highlight("foo.+ --barrel cat ls")?
+        );
+
+        // `cat` should be an argument (because --bar.+ requires one) and `ls`
+        // should be the callable
+        assert_snapshot!(
+            "regex_injection__foo_bar_dot_plus",
+            cfg.highlight("foo.+ --bar.+ cat ls")?
+        );
+
+        // `-b` should be a normal option and `cat` should be a callable. The
+        // `]` option should not break our regex.
+        assert_snapshot!("regex_injection__foo_b", cfg.highlight("foo.+ -b cat ls")?);
 
         Ok(())
     }

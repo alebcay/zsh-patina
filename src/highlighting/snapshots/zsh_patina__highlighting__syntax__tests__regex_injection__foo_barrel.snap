@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"foo.+ --barrel cat ls\")?"
+---
+foo.+ --barrel cat ls
+
+0   5   `foo.+`   CALLABLE `foo.+`
+5   8   ` --`     punctuation.definition.parameter
+8   14  `barrel`  variable.parameter.option
+15  18  `cat`     CALLABLE `cat`
+18  21  ` ls`     meta.function-call.arguments
