@@ -94,21 +94,44 @@ async fn setup() -> GenericImage {
 }
 
 /// Runs zsh-patina in a container and highlights the given buffer. Compares
-/// `$region_highlight` to the expected result.
+/// `$region_highlight` to the expected result. There may be two separate pre-
+/// and post- setup steps that run before and after sourcing `zsh-patina
+/// activate`, respectively. This method will somewhat emulate human user
+/// behavior, in entering most of the buffer first, then "typing out" its last
+/// character afterwards.
 async fn run_highlight(
     image: &GenericImage,
-    setup_commands: &[&str],
+    setup_pre: &[&str],
+    setup_post: &[&str],
     buffer: &str,
     expected: &[String],
 ) {
-    let setup = if setup_commands.is_empty() {
+    let before_activate = if setup_pre.is_empty() {
         String::new()
     } else {
-        format!("{}; ", setup_commands.join("; "))
+        format!("{}; ", setup_pre.join("; "))
     };
+    let after_activate = if setup_post.is_empty() {
+        String::new()
+    } else {
+        format!("{}; ", setup_post.join("; "))
+    };
+
+    // emulate human keystrokes triggering successive highlightings
+    let previous_buffer = buffer
+        .char_indices()
+        .next_back()
+        .map(|(idx, _)| &buffer[..idx])
+        .unwrap_or("");
+    // Trigger highlighting repeatedly in a loop until the daemon has fully
+    // started and $region_highlight is actually filled
+    let highlight_loop = "CURSOR=${#BUFFER}; for i in {1..50}; do _zsh_patina; [[ ${#region_highlight[@]} -gt 0 ]] && break; sleep 0.1; done;";
     let zsh_script = format!(
-        r#"eval "$(zsh-patina activate)"; {setup}
-        BUFFER="{buffer}"; CURSOR=${{#BUFFER}}; for i in {{1..50}}; do _zsh_patina; [[ ${{#region_highlight[@]}} -gt 0 ]] && break; sleep 0.1; done;
+        r#"{before_activate}
+        eval "$(zsh-patina activate)"
+        BUFFER="{previous_buffer}"; {highlight_loop}
+        {after_activate}
+        BUFFER="{buffer}"; {highlight_loop}
         printf '%s\n' "${{region_highlight[@]}}""#
     );
 
@@ -159,6 +182,7 @@ async fn ls_with_option() {
     run_highlight(
         &image,
         &[],
+        &[],
         "ls -l",
         &[
             h(0, 2, DYNAMIC_CALLABLE_COMMAND),
@@ -179,6 +203,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias ll='ls -l'"],
+        &[],
         "ll -a",
         &[
             h(0, 2, DYNAMIC_CALLABLE_ALIAS),
@@ -192,6 +217,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias ll='(ls -l)'"],
+        &[],
         "ll -a",
         &[
             h(0, 2, DYNAMIC_CALLABLE_ALIAS),
@@ -205,6 +231,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias lla='ll -a'", "alias ll='ls -l'"],
+        &[],
         "lla && ll",
         &[
             h(0, 3, DYNAMIC_CALLABLE_ALIAS),
@@ -218,6 +245,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias fb=foobar"],
+        &[],
         "fb",
         &[h(0, 2, DYNAMIC_CALLABLE_MISSING)],
     )
@@ -227,6 +255,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias foobar='ls -l && echo OK'"],
+        &[],
         "foobar",
         &[h(0, 6, DYNAMIC_CALLABLE_ALIAS)],
     )
@@ -236,6 +265,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias foobar='ls -l && missing OK'"],
+        &[],
         "foobar",
         &[h(0, 6, DYNAMIC_CALLABLE_MISSING)],
     )
@@ -248,6 +278,7 @@ async fn resolve_alias() {
             "alias fb='foobar --option'",
             "alias foobar='fb --another-option'",
         ],
+        &[],
         "fb",
         &[h(0, 2, DYNAMIC_CALLABLE_MISSING)],
     )
@@ -257,6 +288,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias grep='grep --color'"],
+        &[],
         "grep",
         &[h(0, 4, DYNAMIC_CALLABLE_ALIAS)],
     )
@@ -267,6 +299,7 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias grep='g --color'", "alias g='grep'"],
+        &[],
         "grep && g",
         &[
             h(0, 4, DYNAMIC_CALLABLE_ALIAS),
@@ -281,12 +314,33 @@ async fn resolve_alias() {
     run_highlight(
         &image,
         &["alias grep='grep --color'", "alias g='grep'"],
+        &[],
         "grep && g",
         &[
             h(0, 4, DYNAMIC_CALLABLE_ALIAS),
             h(5, 7, OPERATOR_LOGICAL_AND),
             h(8, 9, DYNAMIC_CALLABLE_ALIAS),
         ],
+    )
+    .await;
+}
+
+/// Test if a command created in an existing PATH entry after activation is
+/// highlighted correctly.
+#[tokio::test]
+#[ignore]
+async fn command_created_after_activation_in_existing_path_entry() {
+    let image = setup().await;
+
+    run_highlight(
+        &image,
+        &["mkdir -p /tmp/bin", "export PATH=/tmp/bin:$PATH"],
+        &[
+            "printf '#!/bin/sh\n' > /tmp/bin/freshcmd",
+            "chmod +x /tmp/bin/freshcmd",
+        ],
+        "freshcmd",
+        &[h(0, 8, DYNAMIC_CALLABLE_COMMAND)],
     )
     .await;
 }
