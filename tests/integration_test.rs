@@ -93,12 +93,12 @@ async fn setup() -> GenericImage {
     }
 }
 
-/// Runs zsh-patina in a container and highlights the given
-/// buffer. Compares `$region_highlight` to the expected result. There
-/// may be two separate pre- and post- setup steps that run before and
-/// after sourcing `zsh-patina activate`, respectively. This method
-/// will somewhat emulate human user behaviour, in entering most of the
-/// buffer first, then "typing out" its last character afterwards.
+/// Runs zsh-patina in a container and highlights the given buffer. Compares
+/// `$region_highlight` to the expected result. There may be two separate pre-
+/// and post- setup steps that run before and after sourcing `zsh-patina
+/// activate`, respectively. This method will somewhat emulate human user
+/// behavior, in entering most of the buffer first, then "typing out" its last
+/// character afterwards.
 async fn run_highlight(
     image: &GenericImage,
     setup_pre: &[&str],
@@ -123,12 +123,15 @@ async fn run_highlight(
         .next_back()
         .map(|(idx, _)| &buffer[..idx])
         .unwrap_or("");
+    // Trigger highlighting repeatedly in a loop until the daemon has fully
+    // started and $region_highlight is actually filled
+    let highlight_loop = "CURSOR=${#BUFFER}; for i in {1..50}; do _zsh_patina; [[ ${#region_highlight[@]} -gt 0 ]] && break; sleep 0.1; done;";
     let zsh_script = format!(
         r#"{before_activate}
         eval "$(zsh-patina activate)"
-        BUFFER="{previous_buffer}"; CURSOR=${{#BUFFER}}; for i in {{1..50}}; do _zsh_patina; [[ ${{#region_highlight[@]}} -gt 0 ]] && break; sleep 0.1; done;
+        BUFFER="{previous_buffer}"; {highlight_loop}
         {after_activate}
-        BUFFER="{buffer}"; CURSOR=${{#BUFFER}}; for i in {{1..50}}; do _zsh_patina; [[ ${{#region_highlight[@]}} -gt 0 ]] && break; sleep 0.1; done;
+        BUFFER="{buffer}"; {highlight_loop}
         printf '%s\n' "${{region_highlight[@]}}""#
     );
 
@@ -326,7 +329,7 @@ async fn resolve_alias() {
 /// highlighted correctly.
 #[tokio::test]
 #[ignore]
-async fn highlight_command_created_after_activation_in_existing_path_entry() {
+async fn command_created_after_activation_in_existing_path_entry() {
     let image = setup().await;
 
     run_highlight(
