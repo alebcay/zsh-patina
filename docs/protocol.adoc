@@ -132,7 +132,7 @@ The body section follows immediately after the blank line that terminates the he
 [[command-types]]
 == Command Types
 
-The `CMD` header field selects the command to execute. If `CMD` is absent, `HLT` is assumed.
+The `CMD` header field selects the command to execute. If `CMD` is absent, `HLT` is assumed. The daemon must treat any unknown `CMD` value as a parse error and close the connection without responding.
 
 [[cmd-hlt]]
 === Highlight (`CMD=HLT`)
@@ -295,7 +295,23 @@ The `LNS` header field (see <<request-metadata>>) specifies the number of body l
 [[callable-query]]
 ====== Callable Query (`CAL`)
 
-The daemon sends a `?CMD=CAL` query to ask the client to resolve callable names in the current shell environment. Each body line is one callable name. The client MUST respond with one LF-terminated answer line per body line, in order:
+The daemon sends a `?CMD=CAL` query to ask the client to resolve callable names in the current shell environment. Each body line is one callable name.
+
+*Query header fields*
+
+[cols="1,1,1,6", options="header"]
+|===
+|Field |Value type |Default |Description
+
+|`LAS`
+|uint
+|`1`
+|Lookup aliases flag. When `1` (the default), the client MAY report a callable as an alias. When `0`, the client MUST NOT report an alias: it MUST skip any alias check and look up the callable as a function, builtin, or external command instead, returning `m` if none of those match.
+|===
+
+The daemon sets `LAS=0` when it has already visited the callable while recursively expanding an alias chain, preventing infinite loops and matching Zsh's own execution semantics for recursive aliases.
+
+The client MUST respond with one LF-terminated answer line per body line, in order:
 
 [cols="1,6", options="header"]
 |===

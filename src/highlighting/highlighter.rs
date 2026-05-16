@@ -109,6 +109,16 @@ fn mix_styles(base: &SpanStyle, mixin: &SpanStyle) -> SpanStyle {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum CallableType {
+    Alias,
+    Builtin,
+    Command,
+    Function,
+    Missing,
+    Unknown,
+}
+
 pub struct HighlighterBuilder<'a> {
     config: &'a HighlightingConfig,
     home_dir: Option<String>,
@@ -220,7 +230,7 @@ pub struct Highlighter {
     theme: Theme,
     scope_mapping: ScopeMapping,
     syntect_theme: SyntectTheme,
-    callable_choices: Vec<(String, StaticStyle)>,
+    callable_choices: FxHashMap<CallableType, StaticStyle>,
     dynamic_scopes: DynamicScopes,
 }
 
@@ -257,32 +267,25 @@ impl Highlighter {
                     ThemeSource::File(path) => format!("Failed to parse theme file `{path}'"),
                 })?;
 
-        let mut callable_choices: FxHashMap<StaticStyle, String> = FxHashMap::default();
+        let mut callable_choices: FxHashMap<CallableType, StaticStyle> = FxHashMap::default();
         if let Some(alias_style) = resolve_static_style(DYNAMIC_CALLABLE_ALIAS, &theme) {
-            callable_choices.entry(alias_style).or_default().push('a');
+            callable_choices.insert(CallableType::Alias, alias_style);
         }
         if let Some(builtin_style) = resolve_static_style(DYNAMIC_CALLABLE_BUILTIN, &theme) {
-            callable_choices.entry(builtin_style).or_default().push('b');
+            callable_choices.insert(CallableType::Builtin, builtin_style);
         }
         if let Some(command_style) = resolve_static_style(DYNAMIC_CALLABLE_COMMAND, &theme) {
-            callable_choices.entry(command_style).or_default().push('c');
+            callable_choices.insert(CallableType::Command, command_style);
         }
         if let Some(function_style) = resolve_static_style(DYNAMIC_CALLABLE_FUNCTION, &theme) {
-            callable_choices
-                .entry(function_style)
-                .or_default()
-                .push('f');
+            callable_choices.insert(CallableType::Function, function_style);
         }
         if let Some(missing_style) = resolve_static_style(DYNAMIC_CALLABLE_MISSING, &theme) {
-            callable_choices.entry(missing_style).or_default().push('m');
+            callable_choices.insert(CallableType::Missing, missing_style);
         }
         if let Some(else_style) = resolve_static_style(CALLABLE, &theme) {
-            callable_choices.entry(else_style).or_default().push('e');
+            callable_choices.insert(CallableType::Unknown, else_style);
         }
-        let callable_choices = callable_choices
-            .into_iter()
-            .map(|(k, v)| (v, k))
-            .collect::<Vec<_>>();
 
         Ok(Self {
             home_dir,
@@ -305,7 +308,7 @@ impl Highlighter {
     }
 
     /// Return a list of dynamic style choices the plugin has for callables
-    pub fn callable_choices(&self) -> &[(String, StaticStyle)] {
+    pub fn callable_choices(&self) -> &FxHashMap<CallableType, StaticStyle> {
         &self.callable_choices
     }
 

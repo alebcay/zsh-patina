@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, bail};
 use askama::Template;
 use rayon::ThreadPoolBuilder;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
+    borrow::Cow,
     fs::{self, Permissions},
     io::{BufRead, BufReader, Write, stdout},
     os::{
@@ -21,8 +23,8 @@ use crate::{
     commands::check_config,
     config::Config,
     highlighting::{
-        DynamicStyle, Highlighter, HighlighterBuilder, HighlightingRequest, Span, SpanStyle,
-        StaticStyle,
+        CallableType, DynamicStyle, Highlighter, HighlighterBuilder, HighlightingRequest, Span,
+        SpanStyle, StaticStyle,
     },
 };
 
@@ -33,10 +35,11 @@ enum Role {
     Daemon,
 }
 
-/// The version of the communication protocol between the Zsh client and the
-/// highlighting daemon. Increase this version number whenever there has been
-/// a breaking change.
-const PROTOCOL_VERSION: &str = "1";
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Command {
+    Hello,
+    Highlight,
+}
 
 #[derive(Template)]
 #[template(path = "zsh-patina.zsh")]
@@ -99,7 +102,8 @@ fn format_static_style(style: &StaticStyle) -> String {
 
 /// Decode a path that was encoded by our Zsh script with percent-encoding for
 /// ASCII whitespace characters
-fn decode_string(s: &str) -> String {
+#[deprecated = "Protocol version 1 will be removed in one of the next releases"]
+fn decode_string_v1(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
@@ -127,7 +131,8 @@ fn decode_string(s: &str) -> String {
     out
 }
 
-fn encode_string(input: String) -> String {
+#[deprecated = "Protocol version 1 will be removed in one of the next releases"]
+fn encode_string_v1(input: String) -> String {
     // Fast path: no encoding needed
     if !input
         .bytes()
@@ -154,20 +159,75 @@ fn encode_string(input: String) -> String {
     out
 }
 
+fn decode_string(s: &str) -> String {
+    if !s.bytes().any(|b| b == b'%') {
+        // fast path: nothing to decode
+        return s.to_string();
+    }
+
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            match &bytes[i + 1..i + 3] {
+                b"0A" => {
+                    out.push('\n');
+                    i += 3;
+                    continue;
+                }
+                b"25" => {
+                    out.push('%');
+                    i += 3;
+                    continue;
+                }
+                _ => {
+                    // unknown %XX: pass through as literal text
+                    out.push('%');
+                    out.push(bytes[i + 1] as char);
+                    out.push(bytes[i + 2] as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn encode_string(input: &str) -> Cow<'_, str> {
+    if !input.bytes().any(|b| matches!(b, b'%' | b'\n')) {
+        // fast path: nothing to encode
+        return Cow::from(input);
+    }
+
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'%' => out.push_str("%25"),
+            b'\n' => out.push_str("%0A"),
+            _ => out.push(b as char),
+        }
+    }
+    Cow::from(out)
+}
+
 /// Add a region with a Zsh `zle_highlight` style if the region is active. The
 /// region is defined by `start` and `end`, and the style is defined by
 /// `zle_highlight` (e.g. `underline`). If the region is active but
 /// `zle_highlight` is empty, the `default_value` will be used.
-fn add_zle_highlight(
-    active: Option<&str>,
+fn add_zle_highlight<W: Write>(
+    active: Option<bool>,
     start: Option<usize>,
     end: Option<usize>,
     zle_highlight: Option<String>,
     default_value: &str,
-    stream: &mut UnixStream,
+    writer: &mut W,
 ) -> Result<()> {
     if let Some(active) = active
-        && active != "0"
+        && active
         && let Some(start) = start
         && let Some(end) = end
     {
@@ -179,22 +239,53 @@ fn add_zle_highlight(
         } else {
             (end, start)
         };
-        stream
+        writer
             .write_all(format!("{from} {to} {style}\n").as_bytes())
             .context("Unable to send response")?;
     }
     Ok(())
 }
 
-fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> Result<()> {
-    let mut reader = BufReader::new(&stream);
+fn handle_connection(stream: UnixStream, highlighter: Arc<Highlighter>) -> Result<()> {
+    // clone the stream so we can read and write simultaneously
+    let writer = stream
+        .try_clone()
+        .context("Unable to clone socket for writing")?;
+    let mut reader = BufReader::new(stream);
 
-    // read number of lines
-    let mut header = String::new();
+    // read protocol version (or header if protocol is v1)
+    let mut first_line = String::new();
     reader
-        .read_line(&mut header)
+        .read_line(&mut first_line)
         .context("Unable to read header")?;
+    if first_line.ends_with('\n') {
+        first_line.pop();
+    }
 
+    let version = first_line.strip_prefix("VER=").unwrap_or("1");
+    match version {
+        "2" => handle_connection_v2(reader, writer, &highlighter),
+        "1" => handle_connection_v1(reader, writer, first_line, highlighter),
+        _ => {
+            // Return immediately. This will close the connection with an empty
+            // response.
+            log::error!(
+                "Client protocol version is {version:?}. Expected protocol \
+                version is \"1\" or \"2\"."
+            );
+            Ok(())
+        }
+    }
+}
+
+#[deprecated = "Protocol version 1 will be removed in one of the next releases"]
+#[allow(deprecated)]
+fn handle_connection_v1<R: BufRead, W: Write>(
+    mut reader: R,
+    mut writer: W,
+    header: String,
+    highlighter: Arc<Highlighter>,
+) -> Result<()> {
     let mut client_version = None;
 
     let mut term_cols = 1000;
@@ -263,7 +354,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                     .context("Unable to parse number of lines in buffer")?;
             }
 
-            "pwd" => pwd = Some(decode_string(value)),
+            "pwd" => pwd = Some(decode_string_v1(value)),
             "cmd" => cmd = Some(value),
             "banghist" => {
                 history_expansions_enabled = value
@@ -280,7 +371,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                         .context("Unable to parse mark position")?,
                 );
             }
-            "zle_highlight_region" => zle_highlight_region = Some(decode_string(value)),
+            "zle_highlight_region" => zle_highlight_region = Some(decode_string_v1(value)),
 
             "suffix_active" => suffix_active = Some(value),
             "suffix_start" => {
@@ -297,7 +388,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                         .context("Unable to parse suffix end position")?,
                 );
             }
-            "zle_highlight_suffix" => zle_highlight_suffix = Some(decode_string(value)),
+            "zle_highlight_suffix" => zle_highlight_suffix = Some(decode_string_v1(value)),
 
             "isearch_active" => isearch_active = Some(value),
             "isearch_start" => {
@@ -314,7 +405,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                         .context("Unable to parse isearch end position")?,
                 );
             }
-            "zle_highlight_isearch" => zle_highlight_isearch = Some(decode_string(value)),
+            "zle_highlight_isearch" => zle_highlight_isearch = Some(decode_string_v1(value)),
 
             "yank_active" => yank_active = Some(value),
             "yank_start" => {
@@ -331,7 +422,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                         .context("Unable to parse yank end position")?,
                 );
             }
-            "zle_highlight_paste" => zle_highlight_paste = Some(decode_string(value)),
+            "zle_highlight_paste" => zle_highlight_paste = Some(decode_string_v1(value)),
 
             _ => {}
         }
@@ -385,18 +476,16 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
     log::trace!("{buffer_line_count} buffer lines read.");
 
     // check if the client version matches ours
-    if client_version.is_none_or(|v| v != PROTOCOL_VERSION) {
+    if client_version.is_none_or(|v| v != "1") {
         // Return immediately. This will close the connection with an empty
         // response.
-        log::warn!(
-            "Client version is {client_version:?}. Expected protocol version is {PROTOCOL_VERSION}."
-        );
+        log::warn!("Client version is {client_version:?}. Expected protocol version is \"1\".");
         return Ok(());
     }
 
     // handle "hello" command — respond with daemon version
     if cmd == Some("hello") {
-        stream
+        writer
             .write_all(format!("ver={}\n", env!("CARGO_PKG_VERSION")).as_bytes())
             .context("Unable to send version")?;
         return Ok(());
@@ -462,8 +551,8 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
     if cmd == Some("resolve") {
         for s in merged {
             if let SpanStyle::Dynamic(DynamicStyle::Callable { parsed_callable }) = s.style {
-                stream
-                    .write_all(format!("{}\n", encode_string(parsed_callable)).as_bytes())
+                writer
+                    .write_all(format!("{}\n", encode_string_v1(parsed_callable)).as_bytes())
                     .context("Unable to send response")?;
             }
         }
@@ -486,9 +575,16 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                     let all_fss = highlighter
                         .callable_choices()
                         .iter()
-                        .filter_map(|c| {
-                            let fss = format!("{}:{}", c.0, format_static_style(&c.1));
-                            if fss.is_empty() { None } else { Some(fss) }
+                        .map(|c| {
+                            let t = match c.0 {
+                                CallableType::Alias => 'a',
+                                CallableType::Builtin => 'b',
+                                CallableType::Command => 'c',
+                                CallableType::Function => 'f',
+                                CallableType::Missing => 'm',
+                                CallableType::Unknown => 'e',
+                            };
+                            format!("{t}:{}", format_static_style(c.1))
                         })
                         .collect::<Vec<_>>()
                         .join(";");
@@ -499,8 +595,8 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
                             "-DY{} {} {} {}\n",
                             s.start,
                             s.end,
-                            encode_string(parsed_callable),
-                            encode_string(all_fss)
+                            encode_string_v1(parsed_callable),
+                            encode_string_v1(all_fss)
                         ))
                     }
                 }
@@ -509,7 +605,416 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
 
         if let Some(message) = message {
             log::trace!("Writing response: {message}");
-            stream
+            writer
+                .write_all(message.as_bytes())
+                .context("Unable to send response")?;
+        }
+    }
+
+    // apply zle_highlight styles
+    add_zle_highlight(
+        region_active.map(|a| a != "0"),
+        mark,
+        Some(cursor),
+        zle_highlight_region,
+        "standout",
+        &mut writer,
+    )?;
+    add_zle_highlight(
+        suffix_active.map(|a| a != "0"),
+        suffix_start,
+        suffix_end,
+        zle_highlight_suffix,
+        "bold",
+        &mut writer,
+    )?;
+    add_zle_highlight(
+        isearch_active.map(|a| a != "0"),
+        isearch_start,
+        isearch_end,
+        zle_highlight_isearch,
+        "underline",
+        &mut writer,
+    )?;
+    add_zle_highlight(
+        yank_active.map(|a| a != "0"),
+        yank_start,
+        yank_end,
+        zle_highlight_paste,
+        "standout",
+        &mut writer,
+    )?;
+
+    Ok(())
+}
+
+fn handle_connection_v2<R: BufRead, W: Write>(
+    mut reader: R,
+    writer: W,
+    highlighter: &Highlighter,
+) -> Result<()> {
+    let mut cmd = Command::Highlight;
+    let mut body_line_count = 0;
+
+    // read header
+    let mut header_lines = Vec::new();
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .context("Unable to read header line")?;
+        if line.ends_with('\n') {
+            line.pop();
+        }
+        if line.is_empty() {
+            // end of header
+            break;
+        }
+
+        log::trace!("Received header: {}", line);
+
+        if let Some(value) = line.strip_prefix("CMD=") {
+            cmd = match value {
+                "HLO" => Command::Hello,
+                "HLT" => Command::Highlight,
+                _ => bail!("Unknown command: {value}"),
+            };
+        } else if let Some(value) = line.strip_prefix("LNS=") {
+            body_line_count = value
+                .parse::<usize>()
+                .context("Unable to parse number of lines in message body")?;
+        } else {
+            header_lines.push(line);
+        }
+    }
+
+    // read body
+    let mut body_lines = Vec::new();
+    for _ in 0..body_line_count {
+        let mut line = String::new();
+        reader.read_line(&mut line).context("Unable to read line")?;
+        body_lines.push(line);
+    }
+
+    log::trace!("{body_line_count} body lines read.");
+
+    match cmd {
+        Command::Hello => handle_hello(writer),
+        Command::Highlight => {
+            handle_highlight(header_lines, body_lines, reader, writer, highlighter)
+        }
+    }
+}
+
+/// Handle "HLO" command. Respond with daemon version.
+fn handle_hello<W>(mut writer: W) -> Result<()>
+where
+    W: Write,
+{
+    writer
+        .write_all(format!("VER={}\n", env!("CARGO_PKG_VERSION")).as_bytes())
+        .context("Unable to send version")?;
+    Ok(())
+}
+
+/// Handle "HLT" command
+fn handle_highlight<R, W>(
+    header_lines: Vec<String>,
+    body_lines: Vec<String>,
+    mut reader: R,
+    mut writer: W,
+    highlighter: &Highlighter,
+) -> Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut term_cols = 1000;
+    let mut term_rows = 1000;
+    let mut cursor = 0;
+
+    let mut pre_buffer_line_count = 0;
+
+    let mut pwd = None;
+    let mut history_expansions_enabled = true;
+
+    let mut region_active = None;
+    let mut mark = None;
+    let mut zle_highlight_region = None;
+
+    let mut suffix_active = None;
+    let mut suffix_start = None;
+    let mut suffix_end = None;
+    let mut zle_highlight_suffix = None;
+
+    let mut isearch_active = None;
+    let mut isearch_start = None;
+    let mut isearch_end = None;
+    let mut zle_highlight_isearch = None;
+
+    let mut yank_active = None;
+    let mut yank_start = None;
+    let mut yank_end = None;
+    let mut zle_highlight_paste = None;
+
+    // parse header
+    for line in header_lines {
+        if let Some(value) = line.strip_prefix("COL=") {
+            term_cols = value
+                .parse::<usize>()
+                .context("Unable to parse number of terminal columns")?;
+        } else if let Some(value) = line.strip_prefix("ROW=") {
+            term_rows = value
+                .parse::<usize>()
+                .context("Unable to parse number of terminal rows")?;
+        } else if let Some(value) = line.strip_prefix("CUR=") {
+            cursor = value
+                .parse::<usize>()
+                .context("Unable to parse cursor position")?;
+        } else if let Some(value) = line.strip_prefix("PWD=") {
+            pwd = Some(decode_string(value));
+        } else if let Some(value) = line.strip_prefix("BNG=") {
+            history_expansions_enabled = value
+                .parse::<u8>()
+                .context("Unable to parse banghist option")?
+                > 0;
+        } else if let Some(value) = line.strip_prefix("PRL=") {
+            pre_buffer_line_count = value
+                .parse::<usize>()
+                .context("Unable to parse number of lines in pre-buffer")?;
+        } else if let Some(value) = line.strip_prefix("RGA=") {
+            region_active = Some(
+                value
+                    .parse::<u8>()
+                    .context("Unable to parse region active flag")?
+                    > 0,
+            );
+        } else if let Some(value) = line.strip_prefix("RGE=") {
+            mark = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse region end position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("RGH=") {
+            zle_highlight_region = Some(decode_string(value));
+        } else if let Some(value) = line.strip_prefix("SFA=") {
+            suffix_active = Some(
+                value
+                    .parse::<u8>()
+                    .context("Unable to parse suffix active flag")?
+                    > 0,
+            );
+        } else if let Some(value) = line.strip_prefix("SFS=") {
+            suffix_start = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse suffix start position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("SFE=") {
+            suffix_end = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse suffix end position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("SFH=") {
+            zle_highlight_suffix = Some(decode_string(value));
+        } else if let Some(value) = line.strip_prefix("ISA=") {
+            isearch_active = Some(
+                value
+                    .parse::<u8>()
+                    .context("Unable to parse isearch active flag")?
+                    > 0,
+            );
+        } else if let Some(value) = line.strip_prefix("ISS=") {
+            isearch_start = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse isearch start position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("ISE=") {
+            isearch_end = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse isearch end position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("ISH=") {
+            zle_highlight_isearch = Some(decode_string(value));
+        } else if let Some(value) = line.strip_prefix("YKA=") {
+            yank_active = Some(
+                value
+                    .parse::<u8>()
+                    .context("Unable to parse yank active flag")?
+                    > 0,
+            );
+        } else if let Some(value) = line.strip_prefix("YKS=") {
+            yank_start = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse yank start position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("YKE=") {
+            yank_end = Some(
+                value
+                    .parse::<usize>()
+                    .context("Unable to parse yank end position")?,
+            );
+        } else if let Some(value) = line.strip_prefix("YKH=") {
+            zle_highlight_paste = Some(decode_string(value));
+        }
+    }
+
+    if pre_buffer_line_count > body_lines.len() {
+        bail!("Pre-buffer line count is larger than body line count");
+    }
+
+    let buffer_line_count = body_lines.len() - pre_buffer_line_count;
+
+    // read pre-buffer lines
+    let mut body_iterator = body_lines.into_iter();
+    let mut lines = String::new();
+    let mut pre_buffer_total_len = 0;
+    for _ in 0..pre_buffer_line_count {
+        let line = body_iterator
+            .next()
+            .expect("pre_buffer_line_count is always less than or equal to body_lines.len()");
+        lines.push_str(&line);
+        pre_buffer_total_len += line.chars().count();
+    }
+
+    log::trace!("{pre_buffer_line_count} pre-buffer lines parsed.");
+
+    // read buffer lines
+    let mut total_len = 0;
+    let mut line_lengths = Vec::new();
+    let mut cursor_line = 0;
+    let mut cursor_line_found = false;
+    for i in 0..buffer_line_count {
+        let line = body_iterator.next().expect(
+            "buffer_line_count is always equal to body_lines.len() - pre_buffer_line_count",
+        );
+
+        let line_len = line.chars().count();
+
+        // determine in which line we are currently (line_len contains trailing \n)
+        if (total_len..total_len + line_len).contains(&cursor) {
+            cursor_line = i;
+            cursor_line_found = true;
+        }
+
+        if !cursor_line_found || i < cursor_line.saturating_add(term_rows) {
+            lines.push_str(&line);
+            line_lengths.push(line_len);
+            total_len += line_len;
+        } else {
+            // no need to store lines that are outside the terminal window
+            break;
+        }
+    }
+
+    log::trace!("{buffer_line_count} buffer lines parsed.");
+
+    // Performance: Limit spans to a window around the cursor. This is necessary
+    // to reduce the number of ranges sent back to the client. The window is
+    // calculated based on the number of lines and columns in the terminal. We
+    // try to cut off as much as possible. In practice, since we don't know
+    // exactly where the cursor is on the screen, we will most likely still
+    // include too much, but that's OK.
+    let min = line_lengths[0..cursor_line.saturating_sub(term_rows)]
+        .iter()
+        .sum::<usize>()
+        .max(cursor.saturating_sub(term_cols * term_rows));
+    let max = line_lengths[0..line_lengths
+        .len()
+        .min(cursor_line.saturating_add(term_rows))]
+        .iter()
+        .sum::<usize>()
+        .min(cursor.saturating_add(term_cols * term_rows));
+
+    // perform highlighting
+    let request = HighlightingRequest::default()
+        .with_cursor(pre_buffer_total_len + cursor)
+        .with_pwd(pwd.as_deref())
+        .with_history_expansions(history_expansions_enabled)
+        .with_predicate(|range| {
+            // skip spans in the pre-buffer
+            if range.end <= pre_buffer_total_len {
+                return false;
+            }
+
+            // subtract pre-buffer offset
+            let start = range.start.saturating_sub(pre_buffer_total_len);
+            let end = range.end.saturating_sub(pre_buffer_total_len);
+
+            // skip spans outside the current terminal window
+            start < max && end > min
+        });
+    let result = highlighter.highlight(&lines, &request)?;
+
+    // merge consecutive spans with the same style
+    let mut merged: Vec<Span> = Vec::new();
+    for mut span in result {
+        // subtract pre-buffer offset
+        span.start = span.start.saturating_sub(pre_buffer_total_len);
+        span.end = span.end.saturating_sub(pre_buffer_total_len);
+
+        if let Some(prev) = merged.last_mut()
+            && prev.end == span.start
+            && prev.style == span.style
+        {
+            prev.end = span.end;
+        } else {
+            merged.push(span);
+        }
+    }
+
+    log::trace!("Highlighting result: {merged:?}");
+
+    // collect unique callables that need to be resolved
+    let mut callables_to_resolve: FxHashSet<&str> = FxHashSet::default();
+    for span in &merged {
+        if let SpanStyle::Dynamic(DynamicStyle::Callable { parsed_callable }) = &span.style {
+            callables_to_resolve.insert(parsed_callable);
+        }
+    }
+
+    // resolve callables to CallableTypes
+    let resolved_callables = resolve_callables(
+        &callables_to_resolve.into_iter().collect::<Vec<_>>(),
+        true,
+        &mut reader,
+        &mut writer,
+        highlighter,
+        &pwd,
+        FxHashSet::default(),
+    )?;
+
+    // write response
+    for s in &merged {
+        let message = match &s.style {
+            SpanStyle::Static(static_style) => {
+                let fss = format_static_style(static_style);
+                if fss.is_empty() {
+                    None
+                } else {
+                    Some(format!("{} {} {}\n", s.start, s.end, fss))
+                }
+            }
+            SpanStyle::Dynamic(DynamicStyle::Callable { parsed_callable }) => resolved_callables
+                .get(parsed_callable.as_str())
+                .and_then(|callable_type| {
+                    highlighter
+                        .callable_choices()
+                        .get(callable_type)
+                        .or_else(|| highlighter.callable_choices().get(&CallableType::Unknown))
+                        .map(format_static_style)
+                        .filter(|s| !s.is_empty())
+                        .map(|style| format!("{} {} {}\n", s.start, s.end, style))
+                }),
+        };
+
+        if let Some(message) = message {
+            log::trace!("Writing response: {message}");
+            writer
                 .write_all(message.as_bytes())
                 .context("Unable to send response")?;
         }
@@ -522,7 +1027,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
         Some(cursor),
         zle_highlight_region,
         "standout",
-        &mut stream,
+        &mut writer,
     )?;
     add_zle_highlight(
         suffix_active,
@@ -530,7 +1035,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
         suffix_end,
         zle_highlight_suffix,
         "bold",
-        &mut stream,
+        &mut writer,
     )?;
     add_zle_highlight(
         isearch_active,
@@ -538,7 +1043,7 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
         isearch_end,
         zle_highlight_isearch,
         "underline",
-        &mut stream,
+        &mut writer,
     )?;
     add_zle_highlight(
         yank_active,
@@ -546,10 +1051,120 @@ fn handle_connection(mut stream: UnixStream, highlighter: Arc<Highlighter>) -> R
         yank_end,
         zle_highlight_paste,
         "standout",
-        &mut stream,
+        &mut writer,
     )?;
 
     Ok(())
+}
+
+/// Resolve a list of callables to their CallableTypes by asking the client. If
+/// `lookup_aliases` is true, aliases will be resolved recursively until a
+/// non-alias CallableType is found. The `visited` set is used to prevent
+/// infinite recursion when resolving aliases.
+fn resolve_callables<R, W>(
+    callables_to_resolve: &[&str],
+    lookup_aliases: bool,
+    reader: &mut R,
+    writer: &mut W,
+    highlighter: &Highlighter,
+    pwd: &Option<String>,
+    visited: FxHashSet<&str>,
+) -> Result<FxHashMap<String, CallableType>>
+where
+    R: BufRead,
+    W: Write,
+{
+    if callables_to_resolve.is_empty() {
+        return Ok(FxHashMap::default());
+    }
+
+    // send a single query for all callables
+    let las = if !lookup_aliases { "LAS=0\n" } else { "" };
+    writer
+        .write_all(format!("?CMD=CAL\nLNS={}\n{las}\n", callables_to_resolve.len()).as_bytes())
+        .context("Unable to send CAL query")?;
+    for &name in callables_to_resolve {
+        writer
+            .write_all(format!("{}\n", encode_string(name)).as_bytes())
+            .context("Unable to send CAL query body")?;
+    }
+    writer.flush().context("Unable to flush CAL query")?;
+
+    // read one line per callable
+    let mut answers = Vec::new();
+    for name in callables_to_resolve {
+        let mut answer = String::new();
+        reader
+            .read_line(&mut answer)
+            .context("Unable to read CAL answer")?;
+        if answer.ends_with('\n') {
+            answer.pop();
+        }
+        answers.push((name, answer));
+    }
+
+    let mut result = FxHashMap::default();
+    for (name, answer) in answers {
+        let mut callable_type = match answer.bytes().next() {
+            Some(b'a') => CallableType::Alias,
+            Some(b'b') => CallableType::Builtin,
+            Some(b'c') => CallableType::Command,
+            Some(b'f') => CallableType::Function,
+            Some(b'm') => CallableType::Missing,
+            _ => CallableType::Unknown,
+        };
+
+        log::trace!("Callable `{name}' resolved to {callable_type:?}");
+
+        // recursively resolve aliases
+        if callable_type == CallableType::Alias {
+            let resolved_alias = decode_string(&answer[1..]);
+
+            log::trace!("Alias `{name}' resolved to `{resolved_alias}'");
+
+            // apply highlighting to the resolved alias to extract all callables
+            let request = HighlightingRequest::default().with_pwd(pwd.as_deref());
+            let alias_spans = highlighter.highlight(&resolved_alias, &request)?;
+
+            // check if all callables can be resolved
+            'outer: for span in &alias_spans {
+                if let SpanStyle::Dynamic(DynamicStyle::Callable { parsed_callable }) = &span.style
+                {
+                    // If this callable is already in the visited set, tell the
+                    // client to only lookup builtins, functions, commands, but
+                    // not aliases. This prevents infinite recursion and is also
+                    // in line with what Zsh does when it executes an alias.
+                    let las = !visited.contains(parsed_callable.as_str());
+
+                    // ask client to resolve this callable
+                    let mut visited = visited.clone();
+                    visited.insert(name);
+                    let alias_result = resolve_callables(
+                        &[parsed_callable],
+                        las,
+                        reader,
+                        writer,
+                        highlighter,
+                        pwd,
+                        visited,
+                    )?;
+
+                    // if the callable resolves to `Missing`, mark the whole
+                    // alias as `Missing` too
+                    for ar in alias_result {
+                        if ar.1 == CallableType::Missing {
+                            callable_type = CallableType::Missing;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+
+        result.insert(name.to_string(), callable_type);
+    }
+
+    Ok(result)
 }
 
 pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
@@ -566,7 +1181,7 @@ pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
                 .unwrap()
                 .trim_end_matches('/')
                 .to_string(),
-            version: PROTOCOL_VERSION,
+            version: "2",
         };
 
         let mut s = stdout().lock();
@@ -575,7 +1190,7 @@ pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
     }
 
     if already_running {
-        // Check the currently running daemon's version. Restart the it if the
+        // Check the currently running daemon's version. Restart it if the
         // versions don't match.
         let socket_path = sock_path(runtime_dir);
         let mut stream = UnixStream::connect(&socket_path)?;
@@ -584,10 +1199,7 @@ pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
 
-        let header = format!(
-            "ver={PROTOCOL_VERSION} cmd=hello buffer_line_count=0 pre_buffer_line_count=0\n"
-        );
-        stream.write_all(header.as_bytes())?;
+        stream.write_all(b"VER=2\nCMD=HLO\n\n")?;
 
         let mut response = String::new();
         let mut reader = BufReader::new(&stream);
@@ -595,7 +1207,7 @@ pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
 
         let daemon_version = response
             .split_ascii_whitespace()
-            .find_map(|kv| kv.strip_prefix("ver="));
+            .find_map(|kv| kv.strip_prefix("VER="));
         let our_version = env!("CARGO_PKG_VERSION");
 
         if daemon_version.is_none_or(|v| v != our_version) {
