@@ -1,0 +1,8 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"nohup2 ls\")?"
+---
+nohup2 ls
+
+0  6  `nohup2`  CALLABLE `nohup2`
+7  9  `ls`      CALLABLE `ls`

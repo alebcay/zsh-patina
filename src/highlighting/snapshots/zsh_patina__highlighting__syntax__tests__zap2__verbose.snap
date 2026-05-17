@@ -1,0 +1,10 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"zap2 --verbose ls\")?"
+---
+zap2 --verbose ls
+
+0   4   `zap2`     CALLABLE `zap2`
+4   7   ` --`      punctuation.definition.parameter
+7   14  `verbose`  variable.parameter.option
+15  17  `ls`       CALLABLE `ls`

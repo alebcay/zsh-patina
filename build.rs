@@ -2,7 +2,7 @@ use std::{collections::HashSet, env, fs, io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
 use syntect::{
-    dumps::dump_to_uncompressed_file,
+    dumps::{dump_to_file, dump_to_uncompressed_file},
     parsing::{
         SyntaxDefinition, SyntaxSetBuilder,
         syntax_definition::{MatchPattern, Pattern},
@@ -107,9 +107,14 @@ fn main() -> Result<()> {
     let test_theme_dest_path = PathBuf::from(&out_dir).join("test_theme.toml");
     fs::write(test_theme_dest_path, test_theme_contents)?;
 
+    // dump syntax definition to a compressed file
+    let syntax_definition_dest_path = PathBuf::from(&out_dir).join("syntax_definition.packdump");
+    dump_to_file(&syntax_definition, syntax_definition_dest_path)
+        .context("Unable to dump syntax definition to file")?;
+
     // load shell syntax into a syntax set and dump it to a file
     let mut syntax_set_builder = SyntaxSetBuilder::new();
-    syntax_set_builder.add_from_folder("assets/Packages/ShellScript", true)?;
+    syntax_set_builder.add(syntax_definition);
     let syntax_set = syntax_set_builder.build();
     let syntax_dest_path = PathBuf::from(&out_dir).join("syntax_set.packdump");
     dump_to_uncompressed_file(&syntax_set, syntax_dest_path)

@@ -20,9 +20,6 @@ codegen-units = 1
 [profile.dev.package.insta]
 opt-level = 3
 
-[profile.dev.package.similar]
-opt-level = 3
-
 [dependencies]
 anyhow = "1.0.102"
 askama = "0.16.0"
@@ -34,6 +31,7 @@ figment = { version = "0.10.19", features = ["toml"] }
 libc = "0.2.184"
 log = "0.4.29"
 rayon = "1.11.0"
+regex-syntax = { version = "0.8.10", default-features = false }
 rustc-hash = "2.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
 shellexpand = "3.1.2"

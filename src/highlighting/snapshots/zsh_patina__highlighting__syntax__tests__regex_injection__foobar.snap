@@ -1,0 +1,10 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"foobar --other ls\")?"
+---
+foobar --other ls
+
+0   6   `foobar`  CALLABLE `foobar`
+6   9   ` --`     punctuation.definition.parameter
+9   14  `other`   variable.parameter.option
+14  17  ` ls`     meta.function-call.arguments

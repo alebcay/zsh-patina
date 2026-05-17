@@ -153,11 +153,15 @@ fn run() -> Result<()> {
 
     // load config file
     let config = if let Some(config_file_path) = &config_file_path {
-        Figment::new()
+        let c: Config = Figment::new()
             .merge(Serialized::defaults(Config::default()))
             .merge(Toml::file(config_file_path))
             .extract()
-            .with_context(|| format!("Unable to read config file {config_file_path:?}"))?
+            .with_context(|| format!("Unable to read config file {config_file_path:?}"))?;
+        c.highlighting
+            .validate()
+            .with_context(|| format!("Unable to validate config file {config_file_path:?}"))?;
+        c
     } else {
         Config::default()
     };

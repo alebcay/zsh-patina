@@ -298,6 +298,48 @@ timeout_ms = 500
 zsh-patina restart
 ```
 
+### Custom precommands
+
+zsh-patina knows about common precommands such as `sudo`, `env`, `nohup`, and `nice` out of the box. A *precommand* is a command that prefixes another command or a list of arguments, causing zsh-patina to highlight what follows accordingly.
+
+You can add support for additional precommands by adding `[[highlighting.precommands]]` entries to your configuration file:
+
+```toml
+[[highlighting.precommands]]
+name = "mywrapper"
+
+# Controls how the word following the precommand's options is highlighted.
+#
+# "default"   - the next word is treated as a callable -- a command, alias,
+#               function, or builtin -- and highlighting continues from there.
+#               Use this for precommands like `sudo` or `env` that prefix
+#               another command.
+#
+# "arguments" - the remaining words are treated as plain arguments rather than a
+#               callable. Use this for precommands like `sudoedit` that take
+#               file names.
+mode = "default"
+
+# The list of options the precommand supports and that should be treated in
+# separately (because they require arguments, for example). Note that by
+# default, zsh-patina highlights *any* short or long option of a precommand,
+# whether it is configured here or not.
+options = [
+  # `short` is the short flag without the leading dash (e.g. "u" for -u).
+  # `long` is the long flag without the leading dashes (e.g. "user" for --user).
+  # `arg` controls whether the option takes an argument:
+  #     "required" (default) — the option must be followed by an argument
+  #     "optional"           — the option may be followed by an argument
+  #     "none"               — the option takes no argument
+  # `switch_to_mode` (optional): if set to "arguments", the remaining words
+  #     after this option are treated as plain arguments. Useful for options
+  #     likw sudo's -e/--edit, which causes it to behave like sudoedit.
+  { short = "u", long = "user", arg = "required" },
+  { short = "n", arg = "none" },
+  { short = "e", long = "edit", arg = "none", switch_to_mode = "arguments" },
+]
+```
+
 ## Theming
 
 zsh-patina supports custom syntax highlighting themes. You can choose from one of the built-in themes or create your own.

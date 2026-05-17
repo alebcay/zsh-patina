@@ -1,0 +1,10 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"sudo2 -h localhost\")?"
+---
+sudo2 -h localhost
+
+0  5   `sudo2`      CALLABLE `sudo2`
+5  7   ` -`         punctuation.definition.parameter
+7  8   `h`          variable.parameter.option
+9  18  `localhost`  meta.function-call.arguments

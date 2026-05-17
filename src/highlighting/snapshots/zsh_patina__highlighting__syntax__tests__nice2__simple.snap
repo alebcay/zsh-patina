@@ -1,0 +1,8 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"nice2 ls\")?"
+---
+nice2 ls
+
+0  5  `nice2`  CALLABLE `nice2`
+6  8  `ls`     CALLABLE `ls`

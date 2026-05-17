@@ -1,0 +1,11 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"env2 -iu _ env2\")?"
+---
+env2 -iu _ env2
+
+0   4   `env2`   CALLABLE `env2`
+4   6   ` -`     punctuation.definition.parameter
+6   8   `iu`     variable.parameter.option
+9   10  `_`      CALLABLE `_`
+10  15  ` env2`  meta.function-call.arguments

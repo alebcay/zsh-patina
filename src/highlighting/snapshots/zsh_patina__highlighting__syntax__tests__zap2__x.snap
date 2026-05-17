@@ -1,0 +1,10 @@
+---
+source: src/highlighting/syntax.rs
+expression: "cfg.highlight(\"zap2 -x cmd arg1\")?"
+---
+zap2 -x cmd arg1
+
+0  4   `zap2`      CALLABLE `zap2`
+4  6   ` -`        punctuation.definition.parameter
+6  7   `x`         variable.parameter.option
+8  16  `cmd arg1`  meta.function-call.arguments

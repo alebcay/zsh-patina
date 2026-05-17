@@ -21,6 +21,7 @@ use crate::{
             DynamicHighlightingOptions, DynamicScopes, DynamicTokenGroupBuilder, DynamicType,
         },
         historyexpansion::HistoryExpanded,
+        syntax::load_syntax_set,
     },
     theme::{ScopeMapping, Theme, ThemeSource},
 };
@@ -225,10 +226,7 @@ pub struct Highlighter {
 
 impl Highlighter {
     pub fn new(config: &HighlightingConfig, home_dir: String) -> Result<Self> {
-        let syntax_set: SyntaxSet = syntect::dumps::from_uncompressed_data(include_bytes!(
-            concat!(env!("OUT_DIR"), "/syntax_set.packdump")
-        ))
-        .expect("Unable to load shell syntax");
+        let syntax_set = load_syntax_set(&config.precommands);
 
         let theme = Theme::load(&config.theme)?;
         let scope_mapping = ScopeMapping::new(&theme);
@@ -536,7 +534,7 @@ impl Highlighter {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::{
         fmt::{Display, Formatter},
         fs::{self, Permissions},
@@ -554,7 +552,7 @@ mod tests {
     use tabwriter::TabWriter;
     use tempfile::TempDir;
 
-    fn test_config() -> HighlightingConfig {
+    pub fn test_config() -> HighlightingConfig {
         HighlightingConfig {
             theme: ThemeSource::File(concat!(env!("OUT_DIR"), "/test_theme.toml").to_string()),
             timeout: Duration::from_secs(3600),
@@ -562,14 +560,14 @@ mod tests {
         }
     }
 
-    struct TestCfg {
+    pub struct TestCfg {
         highlighter: Highlighter,
         homedir: TempDir,
         tempdir: TempDir,
         pwd: String,
     }
 
-    struct AssertableSpans {
+    pub struct AssertableSpans {
         command: String,
         spans: Vec<Span>,
     }
@@ -638,7 +636,7 @@ mod tests {
     }
 
     impl TestCfg {
-        fn highlight(&self, command: &str) -> Result<AssertableSpans> {
+        pub fn highlight(&self, command: &str) -> Result<AssertableSpans> {
             let request = HighlightingRequest::default().with_pwd(self.pwd.as_str());
             Ok(AssertableSpans {
                 command: command.to_string(),
@@ -660,13 +658,13 @@ mod tests {
             })
         }
 
-        fn touch_file(&self, name: &str) -> Result<PathBuf> {
+        pub fn touch_file(&self, name: &str) -> Result<PathBuf> {
             let test_path = self.tempdir.path().join(name);
             fs::write(&test_path, "test contents")?;
             Ok(test_path)
         }
 
-        fn create_dir(&self, name: &str) -> Result<PathBuf> {
+        pub fn create_dir(&self, name: &str) -> Result<PathBuf> {
             let dest_path = self.tempdir.path().join(name);
             fs::create_dir_all(&dest_path)?;
             Ok(dest_path)
@@ -684,7 +682,7 @@ mod tests {
         test_cfg_with(test_config())
     }
 
-    fn test_cfg_with(config: HighlightingConfig) -> Result<TestCfg> {
+    pub fn test_cfg_with(config: HighlightingConfig) -> Result<TestCfg> {
         let dir = tempfile::tempdir()?;
         let homedir = tempfile::tempdir()?;
         let pwd = dir.path().to_str().unwrap().to_owned();
