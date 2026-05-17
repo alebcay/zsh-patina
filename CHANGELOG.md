@@ -2,6 +2,21 @@
 
 _Note: This project follows [Semantic Versioning]._
 
+## [1.7.0] - 2026-05-17
+
+**New features**
+
+- Add the possibility to configure [custom precommands]. A precommand is a command that prefixes another command or a list of arguments, causing zsh-patina to highlight what follows accordingly.
+
+**Bug fixes**
+
+- Add missing `--edit` option to sudo precommand
+- Recognize new commands installed after `zsh-patina activate` (contributed by @ccjmne 🚀). Previously, programs newly added to `PATH` would not be highlighted as available until the next shell session.
+
+**Maintenance**
+
+- Migrate highlighter tests to snapshot testing
+
 ## [1.6.0] - 2026-05-02
 
 **New features**
@@ -154,6 +169,7 @@ _Note: This project follows [Semantic Versioning]._
 
 _First release._
 
+[1.7.0]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.7.0
 [1.6.0]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.6.0
 [1.5.1]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.5.1
 [1.5.0]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.5.0
@@ -166,6 +182,7 @@ _First release._
 [#10]: https://github.com/michel-kraemer/zsh-patina/issues/10
 [Catppuccin]: https://catppuccin.com/
 [configuration]: https://github.com/michel-kraemer/zsh-patina#configuration
+[custom precommands]: https://github.com/michel-kraemer/zsh-patina#custom-precommands
 [Cygwin]: https://cygwin.com/
 [fsh-default-theme]: https://github.com/zdharma-continuum/fast-syntax-highlighting/blob/master/themes/default.ini
 [MSYS2]: https://www.msys2.org/
