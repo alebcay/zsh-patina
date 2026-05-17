@@ -325,18 +325,18 @@ mode = "default"
 # default, zsh-patina highlights *any* short or long option of a precommand,
 # whether it is configured here or not.
 options = [
-  # `short` is the short flag without the leading dash (e.g. "u" for -u).
-  # `long` is the long flag without the leading dashes (e.g. "user" for --user).
-  # `arg` controls whether the option takes an argument:
-  #     "required" (default) — the option must be followed by an argument
-  #     "optional"           — the option may be followed by an argument
-  #     "none"               — the option takes no argument
-  # `switch_to_mode` (optional): if set to "arguments", the remaining words
-  #     after this option are treated as plain arguments. Useful for options
-  #     likw sudo's -e/--edit, which causes it to behave like sudoedit.
-  { short = "u", long = "user", arg = "required" },
-  { short = "n", arg = "none" },
-  { short = "e", long = "edit", arg = "none", switch_to_mode = "arguments" },
+    # `short` is the short flag without the leading dash (e.g. "u" for -u).
+    # `long` is the long flag without leading dashes (e.g. "user" for --user).
+    # `arg` controls whether the option takes an argument:
+    #     "required" (default) — the option must be followed by an argument
+    #     "optional"           — the option may be followed by an argument
+    #     "none"               — the option takes no argument
+    # `switch_to_mode` (optional): if set to "arguments", the remaining words
+    #     after this option are treated as plain arguments. Useful for options
+    #     like sudo's -e/--edit, which causes it to behave like sudoedit.
+    { short = "u", long = "user", arg = "required" },
+    { short = "n", arg = "none" },
+    { short = "e", long = "edit", arg = "none", switch_to_mode = "arguments" },
 ]
 ```
 
