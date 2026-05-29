@@ -5,7 +5,7 @@ mod highlighter;
 mod historyexpansion;
 mod syntax;
 
-pub use highlighter::{Highlighter, HighlighterBuilder, HighlightingRequest};
+pub use highlighter::{CallableType, Highlighter, HighlighterBuilder, HighlightingRequest};
 
 use crate::theme::Theme;
 

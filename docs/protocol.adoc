@@ -1,0 +1,353 @@
+= zsh-patina -- Client/Daemon Communication Protocol v2
+:toc: left
+:toc-title: Contents
+:sectnums:
+:doctype: article
+:icons: font
+
+== Introduction
+
+zsh-patina provides interactive syntax highlighting for the Zsh line editor (ZLE). On each keypress, a Zsh function (the _client_) sends the current editing buffer to a persistent Rust daemon over a Unix domain socket. The daemon performs syntax analysis and returns a list of highlight spans. This document specifies version 2 of the communication protocol between the zsh-patina client and the daemon.
+
+== Conventions
+
+The keywords "`MUST`", "`MUST NOT`", "`REQUIRED`", "`SHALL`", "`SHOULD`", "`RECOMMENDED`", "`MAY`", and "`OPTIONAL`" in this document are to be interpreted as described in RFC 2119.
+
+The following terms are used throughout:
+
+client::
+  The Zsh function that sends requests and reads responses.
+
+daemon::
+  The Rust daemon process that receives requests and emits spans.
+
+buffer::
+  The text currently being edited in the ZLE line editor.
+
+pre-buffer::
+  Any text above the current ZLE line that has been pushed into a multi-line editing session.
+
+callable::
+  Any name that may be invoked as a command: shell functions, shell builtins, external commands, and aliases.
+
+span::
+  A half-open range `[start, end)` paired with a ZLE highlight style string, suitable for insertion into Zsh's `region_highlight` array.
+
+Integers in this document are non-negative decimal integers unless stated otherwise.
+
+The ABNF syntax used in this document is defined in RFC 5234. 
+
+[[transport]]
+== Transport
+
+Each connection represents exactly one request/response exchange. The daemon MUST close the connection after sending the last response line. The client MUST NOT reuse a connection.
+
+A client SHOULD open a new connection for each keypress rather than holding a connection open.
+
+== Encoding
+
+=== Line Termination
+
+Every line transmitted in either direction is terminated by a single line feed character (LF, 0x0A). LF may appear in a field value only if it has been percent-encoded.
+
+=== Field Names
+
+Header field names and query type codes consist of exactly three uppercase ASCII letters (`A`–`Z`). Field names beginning with `Z` are reserved for future extensions (see <<extensions>>).
+
+[[encoding-values]]
+=== Value Encoding
+
+Field values, query values, and answer values are transmitted as UTF-8 strings. Two characters MUST be percent-encoded wherever they occur in a transmitted value:
+
+[cols="2,2,2", options="header"]
+|===
+|Character |Code point |Encoded form
+
+|Percent
+|U+0025
+|`%25`
+
+|Line feed
+|U+000A
+|`%0A`
+|===
+
+All other byte values pass through unmodified, including spaces (0x20), tabs (0x09), equals signs (0x3D), and all non-ASCII bytes. Implementations MUST NOT encode characters other than those listed above; a receiver MUST be prepared to see unencoded spaces and non-ASCII content in values.
+
+To decode a value, a receiver scans the string left to right in a single pass. Each `%0A` sequence is decoded as LF and each `%25` sequence is decoded as `%`. The two characters following `%` form an atomic unit and MUST NOT be re-scanned after substitution. Any `%XX` sequence whose two-character code is neither `0A` nor `25` MUST be passed through as literal text (the `%` and the two following characters are left unchanged). If `%` appears with fewer than two following characters (i.e., it is the last or second-to-last character of the value), it MUST also be passed through as a literal `%`.
+
+== Request Format
+
+A request consists of a _header section_ followed by a _body section_.
+
+=== Header Section
+
+The header section is a sequence of one or more header fields, each on its own LF-terminated line, followed by a blank line (a bare LF):
+
+----
+header-section = ver-field *header-field blank-line
+ver-field      = "VER" "=" field-value LF
+header-field   = field-name "=" field-value LF
+field-name     = 3UPALPHA
+field-value    = *( %x01-09 / %x0B-FF )   ; any byte except LF
+blank-line     = LF
+UPALPHA        = %x41-5A                  ; uppercase A-Z
+----
+
+The `=` sign in a header field always falls at byte offset 3. The value begins at byte offset 4. A receiver MAY exploit this fixed layout to avoid scanning for `=`.
+
+Field names are case-sensitive. Unknown fields MUST be silently ignored. All fields other than `VER` are independent and MAY appear in any order.
+
+If a value itself contains `=` signs (e.g., a ZLE style string such as `fg=red,bg=blue`), the first `=` at offset 3 is the field delimiter; the remainder of the line is the complete value.
+
+=== Standard Header Fields
+
+[[request-metadata]]
+==== Request Metadata
+
+[cols="1,2,1,6", options="header"]
+|===
+|Field |Value type |Required |Description
+
+|`VER`
+|string
+|REQUIRED
+|Protocol version. MUST be the string `2`.
+
+|`CMD`
+|string
+|OPTIONAL
+|Command type (see <<command-types>>). If absent, `HLT` is assumed.
+
+|`LNS`
+|uint
+|OPTIONAL
+|Total number of lines in the message body. Defaults to `0` if absent.
+|===
+
+=== Body Section
+
+The body section follows immediately after the blank line that terminates the header section. Its content and structure are defined by the command type (see <<command-types>>). When the body is empty, the blank line marks the end of the request.
+
+[[command-types]]
+== Command Types
+
+The `CMD` header field selects the command to execute. If `CMD` is absent, `HLT` is assumed. The daemon must treat any unknown `CMD` value as a parse error and close the connection without responding.
+
+[[cmd-hlt]]
+=== Highlight (`CMD=HLT`)
+
+The highlight command is the primary operation, issued on every keypress. It submits the current editing buffer for syntax analysis and receives highlight spans in return.
+
+[[terminal-context]]
+==== Terminal Context
+
+[cols="1,1,1,7", options="header"]
+|===
+|Field |Value type |Default |Description
+
+|`COL`
+|uint
+|1000
+|Terminal width in columns.
+
+|`ROW`
+|uint
+|1000
+|Terminal height in rows.
+
+|`CUR`
+|uint
+|0
+|Cursor position in the buffer, measured in Unicode scalar values from the start of the buffer, 0-indexed.
+
+|`PWD`
+|string
+|none
+|Current working directory, percent-encoded if it contains LF or `%`. If absent, dynamic highlighting of files and directories is disabled.
+
+|`BNG`
+|uint
+|1
+|Specifies if history expansion (`!`-bang) is enabled (value `1`) or disabled (value `0`).
+|===
+
+[[buffer-sizes]]
+==== Pre-buffer Size
+
+[cols="1,1,1,7", options="header"]
+|===
+|Field |Value type |Default |Description
+
+|`PRL`
+|uint
+|0
+|Number of pre-buffer lines in the body. MUST be less than or equal to `LNS`.
+|===
+
+`LNS` (see <<request-metadata>>) specifies the total number of body lines. The first `PRL` lines are the pre-buffer; the remaining `LNS - PRL` lines are the buffer. A daemon receiving `PRL` greater than `LNS` SHOULD treat this as a parse error and close the connection without responding.
+
+[[overlay-groups]]
+==== Overlay Region Groups
+
+The following four field groups describe active ZLE overlay regions. A group is sent only when the corresponding overlay is active; it is omitted entirely otherwise. The daemon uses these fields to emit styled spans for the overlay areas in addition to syntax spans.
+
+Each group follows the same naming template: `{GG}A` (active flag), `{GG}S` (start position), `{GG}E` (end position), `{GG}H` (highlight style).
+
+*Region selection*
+
+This group omits `{GG}S` because the start is always the cursor position (`CUR`). The selected region spans from `CUR` to `RGE`. The daemon computes `min(CUR, RGE)` and `max(CUR, RGE)` for the actual span boundaries.
+
+[cols="1,1,6", options="header"]
+|===
+|Field |Value type |Description
+
+|`RGA` |uint |Active flag (Zsh `$REGION_ACTIVE`). MUST be any value greater than `0`.
+|`RGE` |uint |End position (Zsh `$MARK`).
+|`RGH` |string |ZLE highlight style (e.g., `fg=blue,reverse`). Default value: `standout`.
+|===
+
+*Suffix*
+
+[cols="1,1,6", options="header"]
+|===
+|Field |Value type |Description
+
+|`SFA` |uint |Active flag (Zsh `$SUFFIX_ACTIVE`). MUST be any value greater than `0`.
+|`SFS` |uint |Start position (Zsh `$SUFFIX_START`).
+|`SFE` |uint |End position (Zsh `$SUFFIX_END`).
+|`SFH` |string |ZLE highlight style (e.g., `fg=blue,reverse`). Default value: `bold`.
+|===
+
+*Incremental search*
+
+[cols="1,1,6", options="header"]
+|===
+|Field |Value type |Description
+
+|`ISA` |uint |Active flag (Zsh `$ISEARCHMATCH_ACTIVE`). MUST be any value greater than `0`.
+|`ISS` |uint |Start position (Zsh `$ISEARCHMATCH_START`).
+|`ISE` |uint |End position (Zsh `$ISEARCHMATCH_END`).
+|`ISH` |string |ZLE highlight style (e.g., `fg=blue,reverse`). Default value: `underline`.
+|===
+
+*Yank/paste*
+
+[cols="1,1,6", options="header"]
+|===
+|Field |Value type |Description
+
+|`YKA` |uint |Active flag (Zsh `$YANK_ACTIVE`). MUST be any value greater than `0`.
+|`YKS` |uint |Start position (Zsh `$YANK_START`).
+|`YKE` |uint |End position (Zsh `$YANK_END`).
+|`YKH` |string |ZLE highlight style (e.g., `fg=blue,reverse`). Default value: `standout`.
+|===
+
+==== Body
+
+The body consists of exactly `LNS` LF-terminated lines. The first `PRL` lines are the pre-buffer; the remaining `LNS - PRL` lines are the buffer. If `LNS` is `0` the body is empty. If `PRL` is `0` all body lines are buffer lines.
+
+==== Response
+
+The response is a sequence of zero or more response lines terminated by EOF.
+
+Two kinds of daemon-to-client items exist: _span lines_ and _queries_. The first byte of the first line distinguishes them:
+
+[cols="2,3", options="header"]
+|===
+|First byte |Kind
+
+|ASCII digit (`0`–`9`) |Span line
+|`?` (0x3F) |Start of query block
+|Any other byte |Parse error (see <<_error_handling>>)
+|===
+
+===== Span Lines
+
+A span line defines a highlighted range of the buffer:
+
+----
+span-line    = start SP end SP style-string LF
+start        = uint
+end          = uint
+uint         = "0" / (%x31-39 *DIGIT)
+style-string = *( %x01-09 / %x0B-FF )   ; any byte except LF
+----
+
+`start` is the 0-indexed, inclusive start position; `end` is the 0-indexed, exclusive end position. Both are measured in Unicode scalar values from the start of the *buffer* (i.e., the pre-buffer offset has already been subtracted by the daemon before transmission). The `style-string` is a ZLE highlight style string such as `fg=red,bold` or `underline`.
+
+The client inserts each received span into `$region_highlight` verbatim, in the order it arrives. Spans are not guaranteed to arrive in ascending position order.
+
+===== Queries and Answers
+
+During response generation, the daemon MAY emit query blocks and span lines in any order; they MAY be freely interleaved. The client MUST be prepared to handle a query block at any point while reading the response. A query block uses the same header-and-body structure as a client request, with `?` prepended to the first line to distinguish it from a span line:
+
+----
+query            = query-first-line *header-field blank-line *query-body-line
+                                                             ; count determined by LNS
+query-first-line = "?" "CMD" "=" query-type LF
+query-type       = 3UPALPHA
+query-body-line  = field-value LF
+----
+
+The `LNS` header field (see <<request-metadata>>) specifies the number of body lines; the client reads exactly `LNS` body lines. Unknown header fields MUST be silently ignored, consistent with <<_header_section>>.
+
+[[callable-query]]
+====== Callable Query (`CAL`)
+
+The daemon sends a `?CMD=CAL` query to ask the client to resolve callable names in the current shell environment. Each body line is one callable name.
+
+*Query header fields*
+
+[cols="1,1,1,6", options="header"]
+|===
+|Field |Value type |Default |Description
+
+|`LAS`
+|uint
+|`1`
+|Lookup aliases flag. When `1` (the default), the client MAY report a callable as an alias. When `0`, the client MUST NOT report an alias: it MUST skip any alias check and look up the callable as a function, builtin, or external command instead, returning `m` if none of those match.
+|===
+
+The daemon sets `LAS=0` when it has already visited the callable while recursively expanding an alias chain, preventing infinite loops and matching Zsh's own execution semantics for recursive aliases.
+
+The client MUST respond with one LF-terminated answer line per body line, in order:
+
+[cols="1,6", options="header"]
+|===
+|Answer |Meaning
+
+|`f` |Shell function
+|`b` |Shell builtin
+|`c` |External command
+|`m` |Not found / missing
+|`a<body>` |Alias. The character `a` is immediately followed by the alias expansion body (no separator). An empty body (`a` followed immediately by LF) is valid and represents an alias expanding to the empty string. The body MUST be percent-encoded per <<encoding-values>>.
+|===
+
+[[cmd-hlo]]
+=== Hello (`CMD=HLO`)
+
+Can be used to verify that the running daemon is the expected version. The body MUST be empty; if `LNS` is greater than `0`, the daemon MUST ignore any body lines.
+
+The daemon responds with a single line followed by EOF:
+
+----
+VER=<version>
+----
+
+where `<version>` is the daemon's application version string (e.g., `1.7.0`).
+
+== Version Negotiation
+
+The client MUST include `VER=2` in every request. If the daemon receives an unsupported `VER` value, it MUST close the connection immediately without sending any response. The client MUST ignore empty responses.
+
+== Error Handling
+
+If a protocol parse error occurs--in headers, body lines, query blocks, or answer lines--the affected party SHOULD log the error and, unless it can recover from the error, MUST immediately close the connection without sending any further data. The other party MUST treat any unexpected connection closure identically to a normal EOF: any partial response already received is applied as-is.
+
+[[extensions]]
+== Extension Mechanism
+
+Field names and query type codes beginning with `Z` are reserved for future protocol extensions.
+
+Receivers MUST silently ignore any field name or query type they do not recognize, including all `Z`-prefixed names. This provides forward compatibility: a daemon implementing a future version of this protocol can include `Z`-prefixed fields that older clients simply discard, and vice versa.

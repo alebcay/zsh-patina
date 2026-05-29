@@ -14,89 +14,17 @@ zsh-patina() {
     "$_ZSH_PATINA_PATH" "$@"
 }
 
-_zsh_patina_resolve_alias() {
-    local content=$1
-    shift
-    local -a visited=("$@")
-
-    # Count lines in content
-    local count=0
-    if [[ -n "$content" ]]; then
-        count=$(( ${#${content//[^$'\n']/}} + 1 ))
-    fi
-
-    if ! zsocket "$socket_path" 2>/dev/null; then
-        # this should not happen because we've already connected to the daemon before
-        zle -M "zsh-patina: failed to connect to socket at $socket_path."
-        REPLY=m
-        return
-    fi
-    local fd=$REPLY
-
-    {
-        # build header
-        local header="ver=<{version}> cmd=resolve buffer_line_count=$count pwd=$_ZSH_PATINA_ENCODED_PWD"
-
-        # send header
-        print -r -- $header
-
-        # send lines
-        if (( count != 0 )); then
-            print -r -- "$content"
-        fi
-    } >&$fd || {
-        zle -M  "zsh-patina: Write to socket failed"
-        exec {fd}>&-
-        REPLY=m
-        return
-    }
-
-    # read the full response
-    local -a lines=()
-    local line
-    while IFS= read -r -u $fd line; do
-        [[ -z "$line" ]] && continue
-        _zsh_patina_decode_string $line
-        lines+=("$REPLY")
-    done
-
-    # close socket connection before recursion
-    exec {fd}>&-
-
-    # recursively resolve each callable
-    local result=a
-    for line in "${lines[@]}"; do
-        _zsh_patina_resolve_callable "$line" "${visited[@]}"
-        if [[ "$REPLY" == m ]]; then
-            result=m
-            break
-        fi
-    done
-
-    REPLY=$result
-}
-
 _zsh_patina_resolve_callable() {
     local word=$1
-    shift
-    local -a visited=("$@")
+    local lookup_aliases=${2:-1}
 
-    local matched_alias
-    if (( $+aliases[(e)$word] )); then
-        matched_alias=$aliases[$word]
-    elif (( $+galiases[(e)$word] )); then
-        matched_alias=$galiases[$word]
-    else
-        unset matched_alias
-    fi
-
-    # recursively resolve unvisited aliases
-    if (( $+matched_alias && ! ${visited[(Ie)$word]} )); then
-        _zsh_patina_resolve_alias "$matched_alias" "$word" "${visited[@]}"
-        return
-    fi
-
-    if (( $+functions[(e)$word] )); then
+    if (( lookup_aliases )) && (( $+aliases[(e)$word] )); then
+        _zsh_patina_encode_string "$aliases[$word]"
+        REPLY="a$REPLY"
+    elif (( lookup_aliases )) && (( $+galiases[(e)$word] )); then
+        _zsh_patina_encode_string "$galiases[$word]"
+        REPLY="a$REPLY"
+    elif (( $+functions[(e)$word] )); then
         REPLY=f
     elif (( $+builtins[(e)$word] )); then
         REPLY=b
@@ -114,15 +42,11 @@ _zsh_patina_resolve_callable() {
 
 _zsh_patina_encode_string() {
     # fast path
-    [[ $1 != *[%$'\t\n\r\f ']* ]] && { REPLY="$1"; return }
+    [[ $1 != *[%$'\n']* ]] && { REPLY="$1"; return }
 
-    # only encode characters recognized by Rust's split_ascii_whitespace()
+    # encode % first so the % in %0A doesn't get double-encoded
     local s="${1//'%'/%25}"
-    s="${s//' '/%20}"
-    s="${s//$'\t'/%09}"
     s="${s//$'\n'/%0A}"
-    s="${s//$'\r'/%0D}"
-    s="${s//$'\f'/%0C}"
 
     REPLY="$s"
 }
@@ -131,11 +55,8 @@ _zsh_patina_decode_string() {
     # fast path
     [[ $1 != *%* ]] && { REPLY="$1"; return }
 
-    local s="${1//'%0C'/$'\f'}"
-    s="${s//'%0D'/$'\r'}"
-    s="${s//'%0A'/$'\n'}"
-    s="${s//'%09'/$'\t'}"
-    s="${s//'%20'/ }"
+    # decode %0A first so that %250A becomes %0A (literal), not a newline
+    local s="${1//'%0A'/$'\n'}"
     s="${s//'%25'/%}"
 
     REPLY="$s"
@@ -164,13 +85,17 @@ _zsh_patina() {
         return
     fi
 
+    # Trim pre-buffer (remove single trailing \n). `print -r` will add it again
+    # later anyhow
+    local trimmed_prebuffer="${PREBUFFER%$'\n'}"
+
     # Count lines in pre-buffer. In a multi-line input at the secondary prompt,
     # the pre-buffer contains the lines before the one the cursor is currently
     # in.
     local pre_count=0
-    if [[ -n "$PREBUFFER" ]]; then
+    if [[ -n "$trimmed_prebuffer" ]]; then
         # remove every character instead of '\n' and then get string length
-        pre_count=$(( ${#${PREBUFFER//[^$'\n']/}} + 1 ))
+        pre_count=$(( ${#${trimmed_prebuffer//[^$'\n']/}} + 1 ))
     fi
 
     # Count lines in buffer
@@ -198,27 +123,28 @@ _zsh_patina() {
 
     {
         # build header
-        local header="ver=<{version}> term_cols=$COLUMNS term_rows=$LINES cursor=$CURSOR pre_buffer_line_count=$pre_count buffer_line_count=$count pwd=$_ZSH_PATINA_ENCODED_PWD"
+        local lns=$(( $pre_count + $count ))
+        local header="VER=<{version}>"$'\n'"COL=$COLUMNS"$'\n'"ROW=$LINES"$'\n'"CUR=$CURSOR"$'\n'"PRL=$pre_count"$'\n'"LNS=$lns"$'\n'"PWD=$_ZSH_PATINA_ENCODED_PWD"$'\n'
 
         if (( $+REGION_ACTIVE )) && (( REGION_ACTIVE != 0 )); then
             _zsh_patina_encode_string "${${zle_highlight[(r)region:*]-}#*:}"
-            header="${header} region_active=$REGION_ACTIVE mark=$MARK zle_highlight_region=$REPLY"
+            header="${header}RGA=1"$'\n'"RGE=$MARK"$'\n'"RGH=$REPLY"$'\n'
         fi
         if (( $+SUFFIX_ACTIVE )) && (( SUFFIX_ACTIVE != 0 )); then
             _zsh_patina_encode_string "${${zle_highlight[(r)suffix:*]-}#*:}"
-            header="${header} suffix_active=$SUFFIX_ACTIVE suffix_start=$SUFFIX_START suffix_end=$SUFFIX_END zle_highlight_suffix=$REPLY"
+            header="${header}SFA=1"$'\n'"SFS=$SUFFIX_START"$'\n'"SFE=$SUFFIX_END"$'\n'"SFH=$REPLY"$'\n'
         fi
         if (( $+ISEARCHMATCH_ACTIVE )) && (( ISEARCHMATCH_ACTIVE != 0 )); then
             _zsh_patina_encode_string "${${zle_highlight[(r)isearch:*]-}#*:}"
-            header="${header} isearch_active=$ISEARCHMATCH_ACTIVE isearch_start=$ISEARCHMATCH_START isearch_end=$ISEARCHMATCH_END zle_highlight_isearch=$REPLY"
+            header="${header}ISA=1"$'\n'"ISS=$ISEARCHMATCH_START"$'\n'"ISE=$ISEARCHMATCH_END"$'\n'"ISH=$REPLY"$'\n'
         fi
         if (( $+YANK_ACTIVE )) && (( YANK_ACTIVE != 0 )); then
             _zsh_patina_encode_string "${${zle_highlight[(r)paste:*]-}#*:}"
-            header="${header} yank_active=$YANK_ACTIVE yank_start=$YANK_START yank_end=$YANK_END zle_highlight_paste=$REPLY"
+            header="${header}YKA=1"$'\n'"YKS=$YANK_START"$'\n'"YKE=$YANK_END"$'\n'"YKH=$REPLY"$'\n'
         fi
 
         if [[ ! -o banghist ]]; then
-            header="${header} banghist=0"
+            header="${header}BNG=0"$'\n'
         fi
 
         # send header
@@ -226,7 +152,7 @@ _zsh_patina() {
 
         # send pre-buffer lines
         if (( pre_count != 0 )); then
-            print -r -- "$PREBUFFER"
+            print -r -- "$trimmed_prebuffer"
         fi
 
         # send lines
@@ -241,48 +167,41 @@ _zsh_patina() {
 
     # Must be declared here because we reuse them in the while loop. Otherwise,
     # their contents will be printed in the second loop iteration (strange Zsh
-    # behaviour).
-    local entry range_start range_end ch
-
-    # declaring all other variables outside the while loop (outside the hot
-    # path), too, slightly increases performance
-    local -A choices
-    local parsed_callable args choices_raw remainder key value
+    # behaviour). As a matter of fact, declaring all variables outside the while
+    # loop (outside the hot path), slightly increases performance.
+    local query_cmd query_lns query_las qline qi
 
     local new_regions=("${region_highlight[@]}") # preserve existing highlighting
     local line
     while IFS= read -r -u $fd line; do
         [[ -z "$line" ]] && continue
 
-        if [[ "$line" == "-DY"* ]]; then
-            # Strip "-DY" prefix and split by whitespace
-            remainder="${line#-DY}"
-            args=(${(@s/ /)remainder})
-
-            range_start=$args[1]
-            range_end=$args[2]
-            _zsh_patina_decode_string $args[3]
-            parsed_callable=$REPLY
-            _zsh_patina_decode_string $args[4]
-            choices_raw=$REPLY
-
-            # Parse choices_raw ("key:val;key:val;...") into associative array.
-            # Split keys into individual characters.
-            choices=()
-            for entry in "${(@s/;/)choices_raw}"; do
-                key="${entry%%:*}"
-                value="${entry#*:}"
-                for ch in "${(@s::)key}"; do
-                    choices[$ch]="$value"
-                done
+        if [[ "$line" == "?"* ]]; then
+            # query block: read header fields until blank line
+            query_cmd="${line#?CMD=}"
+            query_lns=0
+            query_las=1
+            while IFS= read -r -u $fd qline; do
+                [[ -z "$qline" ]] && break
+                if [[ "$qline" == "LNS="* ]]; then
+                    query_lns="${qline#LNS=}"
+                elif [[ "$qline" == "LAS="* ]]; then
+                    query_las="${qline#LAS=}"
+                fi
             done
 
-            _zsh_patina_resolve_callable $parsed_callable
-
-            if (( $+choices[$REPLY] )); then
-                new_regions+=("$range_start $range_end ${choices[$REPLY]} memo=zsh_patina")
-            elif (( $+choices[e] )); then
-                new_regions+=("$range_start $range_end ${choices[e]} memo=zsh_patina")
+            if [[ "$query_cmd" == "CAL" ]]; then
+                for (( qi = 0; qi < query_lns; qi++ )); do
+                    IFS= read -r -u $fd qline
+                    _zsh_patina_decode_string "$qline"
+                    _zsh_patina_resolve_callable "$REPLY" $query_las
+                    print -r -u $fd -- "$REPLY"
+                done
+            else
+                # unknown query type: drain body lines to keep socket in sync
+                for (( qi = 0; qi < query_lns; qi++ )); do
+                    IFS= read -r -u $fd qline
+                done
             fi
         else
             new_regions+=("$line memo=zsh_patina")
