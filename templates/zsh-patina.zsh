@@ -72,6 +72,12 @@ _zsh_highlight() {
 _zsh_patina() {
     # start=$EPOCHREALTIME
 
+    # Performance: Return immediately if there are bytes pending for input. This
+    # can happen when pasting from the clipboard or when positioning the cursor
+    # with Alt+Click/Option+Click, for example.
+    (( KEYS_QUEUED_COUNT > 0 )) && return
+    (( PENDING > 0 )) && return
+
     # remove tokens we have set earlier - do not clear the whole array as this
     # might reset syntax highlighting from other plugins (e.g. auto suggestions)
     region_highlight=( ${region_highlight:#*memo=zsh_patina} )
