@@ -46,6 +46,8 @@ fn collect_from_match(match_pattern: &MatchPattern, scopes: &mut HashSet<String>
 }
 
 fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed=assets/Packages/ShellScript/Bash.sublime-syntax");
+
     let out_dir = env::var_os("OUT_DIR").unwrap();
 
     // get all possible scopes from the Sublime syntax
