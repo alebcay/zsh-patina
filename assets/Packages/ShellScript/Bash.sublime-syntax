@@ -153,56 +153,50 @@ contexts:
     - match: \bthen\b
       scope: keyword.control.if.then.shell
       pop: true
-    - match: \b(elif){{keyword_boundary_end}}(?:\s*(!))?
+    # minor performance optimization: merge similar patterns
+    - match: \b((else)|(do)){{keyword_boundary_end}}
       captures:
-        1: keyword.control.if.elif.shell
-        2: keyword.operator.logical.shell
-    - match: \bfi{{keyword_boundary_end}}
-      scope: keyword.control.if.end.shell
-      set: [cmd-post, cmd-args]
-    - match: \belse{{keyword_boundary_end}}
-      scope: keyword.control.if.else.shell
+        2: keyword.control.if.else.shell
+        3: keyword.control.do.shell
       pop: true
     - match: \bfor{{keyword_boundary_end}}
       scope: keyword.control.for.shell
       set: [cmd-post, for-args]
-    - match: \bdo{{keyword_boundary_end}}
-      scope: keyword.control.do.shell
-      pop: true
-    - match: \bdone{{keyword_boundary_end}}
-      scope: keyword.control.done.shell
+    - match: \b(elif){{keyword_boundary_end}}(?:\s*(!))?
+      captures:
+        1: keyword.control.if.elif.shell
+        2: keyword.operator.logical.shell
+    # minor performance optimization: merge similar patterns
+    - match: \b((fi)|(done)|(break)|(end)){{keyword_boundary_end}}
+      captures:
+        2: keyword.control.if.end.shell
+        3: keyword.control.done.shell
+        4: keyword.control.flow.break.shell
+        5: keyword.control.end.shell
       set: [cmd-post, cmd-args]
-    - match: \bwhile{{keyword_boundary_end}}
-      scope: keyword.control.while.shell
-    - match: \buntil{{keyword_boundary_end}}
-      scope:  keyword.control.until.shell
+    # minor performance optimization: merge similar patterns
+    - match: \b((while)|(until)|(continue)|(time)|(nocorrect)){{keyword_boundary_end}}
+      captures:
+        2: keyword.control.while.shell
+        3: keyword.control.until.shell
+        4: keyword.control.flow.continue.shell
+        5: keyword.control.flow.time.shell
+        6: keyword.control.flow.nocorrect.shell
     - match: \bcase{{keyword_boundary_end}}
       scope: keyword.control.case.begin.shell
       set: [case-body, case-item, case-item-first-character, case-preamble]
-    - match: \bcontinue{{keyword_boundary_end}}
-      scope: keyword.control.flow.continue.shell
-    - match: \bbreak{{keyword_boundary_end}}
-      scope: keyword.control.flow.break.shell
-      set: [cmd-post, cmd-args]
     - match: \brepeat{{keyword_boundary_end}}
       scope: keyword.control.repeat.shell
       set:
         - include: expression
         - match: (?=\S)
           pop: true
-    - match: \btime{{keyword_boundary_end}}
-      scope: keyword.control.flow.time.shell
-    - match: \bnocorrect{{keyword_boundary_end}}
-      scope: keyword.control.flow.nocorrect.shell
     - match: \bselect{{keyword_boundary_end}}
       scope: keyword.control.select.shell
       set: [cmd-post, select-args]
     - match: \bforeach{{keyword_boundary_end}}
       scope: keyword.control.foreach.shell
       set: [cmd-post, foreach-args]
-    - match: \bend{{keyword_boundary_end}}
-      scope: keyword.control.end.shell
-      set: [cmd-post, cmd-args]
     #---------------------------------------------------------------------------
     # Precommands:
     #
@@ -224,8 +218,11 @@ contexts:
     # precommand modifiers (see https://linux.die.net/man/1/zshmisc)
     - match: (?<!\w)-{{keyword_boundary_end}}
       scope: keyword.builtin.dash.shell precommand.builtin.dash.shell
-    - match: \bbuiltin{{keyword_boundary_end}}
-      scope: keyword.builtin.builtin.shell precommand.builtin.builtin.shell
+    # minor performance optimization: merge similar patterns
+    - match: \b((builtin)|(noglob)){{keyword_boundary_end}}
+      captures:
+        2: keyword.builtin.builtin.shell precommand.builtin.builtin.shell
+        3: keyword.builtin.noglob.shell precommand.builtin.noglob.shell
     - match: \bcommand{{keyword_boundary_end}}
       scope: keyword.builtin.command.shell precommand.builtin.command.shell
       set:
@@ -243,8 +240,6 @@ contexts:
           push: precommand-exec-argv0
         - include: precommand-option
         - include: precommand-end-of-options
-    - match: \bnoglob{{keyword_boundary_end}}
-      scope: keyword.builtin.noglob.shell precommand.builtin.noglob.shell
     # external precommands: note that they have to have the scope
     # `variable.function.shell` because they may or may not be installed on the
     # system and we want to highlight them in the same way as other callables.
