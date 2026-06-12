@@ -48,6 +48,7 @@ pub enum DynamicType {
 pub struct DynamicHighlightingOptions<'a> {
     cursor: Option<usize>,
     pwd: &'a str,
+    autocd: bool,
     home_dir: &'a str,
     theme: &'a Theme,
     highlight_partial_paths: bool,
@@ -57,6 +58,7 @@ impl<'a> DynamicHighlightingOptions<'a> {
     pub fn new(
         cursor: Option<usize>,
         pwd: &'a str,
+        autocd: bool,
         home_dir: &'a str,
         theme: &'a Theme,
         highlight_partial_paths: bool,
@@ -64,6 +66,7 @@ impl<'a> DynamicHighlightingOptions<'a> {
         Self {
             cursor,
             pwd,
+            autocd,
             home_dir,
             theme,
             highlight_partial_paths,
@@ -98,13 +101,31 @@ impl DynamicTokenGroup {
             log::trace!("Dynamically highlighting callable: {p}");
             let span_style = if p == "."
                 || p == ".."
-                || (p.contains('/') && is_path_executable(&p, options.pwd))
+                || (p.contains('/') && is_path_executable(&p, options.pwd, options.autocd))
             {
                 log::trace!("Callable `{p}' is executable.");
-                if let Some(style) = resolve_static_style(DYNAMIC_CALLABLE_COMMAND, options.theme) {
-                    Some(SpanStyle::Static(style))
-                } else {
-                    resolve_static_style(CALLABLE, options.theme).map(SpanStyle::Static)
+                resolve_static_style(DYNAMIC_CALLABLE_COMMAND, options.theme)
+                    .or_else(|| resolve_static_style(CALLABLE, options.theme))
+                    .map(SpanStyle::Static)
+            } else if options.autocd {
+                // only perform highlighting of partial paths if it is enabled and
+                // if the cursor touches the prefix
+                let partial = options.highlight_partial_paths
+                    && options
+                        .cursor
+                        .map(|c| (range.start..=range.end).contains(&c))
+                        .unwrap_or_default();
+
+                match path_type(&p, options.pwd, partial) {
+                    Some((PathType::Directory, _)) => {
+                        log::trace!("Callable `{p}' is a directory (autocd).");
+                        resolve_static_style(DYNAMIC_CALLABLE_COMMAND, options.theme)
+                            .or_else(|| resolve_static_style(CALLABLE, options.theme))
+                            .map(SpanStyle::Static)
+                    }
+                    _ => Some(SpanStyle::Dynamic(DynamicStyle::Callable {
+                        parsed_callable: p,
+                    })),
                 }
             } else {
                 Some(SpanStyle::Dynamic(DynamicStyle::Callable {

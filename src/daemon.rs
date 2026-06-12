@@ -736,6 +736,7 @@ where
     let mut pre_buffer_line_count = 0;
 
     let mut pwd = None;
+    let mut autocd_enabled = false;
     let mut history_expansions_enabled = true;
 
     let mut region_active = None;
@@ -773,6 +774,11 @@ where
                 .context("Unable to parse cursor position")?;
         } else if let Some(value) = line.strip_prefix("PWD=") {
             pwd = Some(decode_string(value));
+        } else if let Some(value) = line.strip_prefix("ACD=") {
+            autocd_enabled = value
+                .parse::<u8>()
+                .context("Unable to parse autocd option")?
+                > 0;
         } else if let Some(value) = line.strip_prefix("BNG=") {
             history_expansions_enabled = value
                 .parse::<u8>()
@@ -934,6 +940,7 @@ where
     let request = HighlightingRequest::default()
         .with_cursor(pre_buffer_total_len + cursor)
         .with_pwd(pwd.as_deref())
+        .with_autocd(autocd_enabled)
         .with_history_expansions(history_expansions_enabled)
         .with_predicate(|range| {
             // skip spans in the pre-buffer

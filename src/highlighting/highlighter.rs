@@ -158,6 +158,7 @@ where
     cursor: Option<usize>,
     pwd: Option<&'a str>,
     history_expansions_enabled: bool,
+    autocd_enabled: bool,
     predicate: P,
 }
 
@@ -192,6 +193,16 @@ where
         }
     }
 
+    /// Enable or disable support for the AUTO_CD option (i.e. that a bare
+    /// directory in callable position is highlighted as a command if it is
+    /// executable)
+    pub fn with_autocd(&self, enabled: bool) -> Self {
+        Self {
+            autocd_enabled: enabled,
+            ..*self
+        }
+    }
+
     /// Set the predicate function that determines which spans should be
     /// highlighted The predicate function takes a character index range and
     /// returns `true` if the span within that range should be highlighted, and
@@ -204,6 +215,7 @@ where
             cursor: self.cursor,
             pwd: self.pwd,
             history_expansions_enabled: self.history_expansions_enabled,
+            autocd_enabled: self.autocd_enabled,
             predicate,
         }
     }
@@ -215,6 +227,7 @@ impl Default for HighlightingRequest<'_, fn(&Range<usize>) -> bool> {
             cursor: None,
             pwd: None,
             history_expansions_enabled: true,
+            autocd_enabled: false,
             predicate: |_: &Range<usize>| true,
         }
     }
@@ -339,6 +352,7 @@ impl Highlighter {
             DynamicHighlightingOptions::new(
                 request.cursor,
                 pwd,
+                request.autocd_enabled,
                 &self.home_dir,
                 &self.theme,
                 self.dynamic_arguments_type == DynamicConfigType::Partial,
@@ -806,6 +820,195 @@ pub mod tests {
         assert_snapshot!(
             "argument_is_file__ansi_quotes",
             cfg.highlight(r#"cp $'test.txt' dest.txt"#)?
+        );
+
+        Ok(())
+    }
+
+    /// Test that a directory in callable position is highlighted correctly
+    #[test]
+    fn directory_in_callable_position() -> Result<()> {
+        let cfg = test_cfg()?;
+        cfg.create_dir("mydir")?;
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position__name",
+            cfg.highlight("mydir")?
+        );
+
+        // will be highlighted as a command (because the directory exists and is
+        // executable)
+        assert_snapshot!(
+            "directory_in_callable_position__dotslash_name",
+            cfg.highlight("./mydir")?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position__doesnotexist",
+            cfg.highlight("doesnotexist")?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position__dotslash_doesnotexist",
+            cfg.highlight("./doesnotexist")?
+        );
+
+        Ok(())
+    }
+
+    /// Test that a directory in callable position is highlighted correctly with
+    /// the autocd option enabled
+    #[test]
+    fn directory_in_callable_position_autocd() -> Result<()> {
+        let cfg = test_cfg()?;
+        cfg.create_dir("mydir")?;
+
+        // will be highlighted as a command
+        assert_snapshot!(
+            "directory_in_callable_position_autocd__name",
+            cfg.highlight_with_request(
+                "mydir",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a command (similar to when autocd is not
+        // enabled)
+        assert_snapshot!(
+            "directory_in_callable_position_autocd__dotslash_name",
+            cfg.highlight_with_request(
+                "./mydir",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position_autocd__doesnotexist",
+            cfg.highlight_with_request(
+                "doesnotexist",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position_autocd__dotslash_doesnotexist",
+            cfg.highlight_with_request(
+                "./doesnotexist",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        Ok(())
+    }
+
+    /// Test that a directory in callable position is highlighted correctly with
+    /// partial dynamic highlighting (with or without the autocd option)
+    #[test]
+    fn directory_in_callable_position_partial() -> Result<()> {
+        let mut config = test_config();
+        config.dynamic = DynamicConfig {
+            callables: true,
+            paths: DynamicConfigType::Partial,
+        };
+        let cfg = test_cfg_with(config)?;
+        cfg.create_dir("mydir")?;
+
+        // will be highlighted as a command
+        assert_snapshot!(
+            "directory_in_callable_position_partial__partial_name_autocd",
+            cfg.highlight_with_request(
+                "myd",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_cursor(3)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position_partial__partial_name",
+            cfg.highlight_with_request(
+                "myd",
+                HighlightingRequest::default()
+                    .with_autocd(false)
+                    .with_cursor(3)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a command
+        assert_snapshot!(
+            "directory_in_callable_position_partial__full_name_autocd",
+            cfg.highlight_with_request(
+                "mydir",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_cursor(5)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position_partial__full_name",
+            cfg.highlight_with_request(
+                "mydir",
+                HighlightingRequest::default()
+                    .with_autocd(false)
+                    .with_cursor(5)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a command
+        assert_snapshot!(
+            "directory_in_callable_position_partial__partial_dotslash_name_autocd",
+            cfg.highlight_with_request(
+                "./myd",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_cursor(5)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a dynamic callable
+        assert_snapshot!(
+            "directory_in_callable_position_partial__partial_dotslash_name",
+            cfg.highlight_with_request(
+                "./myd",
+                HighlightingRequest::default()
+                    .with_autocd(false)
+                    .with_cursor(5)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
+        );
+
+        // will be highlighted as a command (similar to when autocd is not
+        // enabled)
+        assert_snapshot!(
+            "directory_in_callable_position_partial__full_dotslash_name_autocd",
+            cfg.highlight_with_request(
+                "./mydir",
+                HighlightingRequest::default()
+                    .with_autocd(true)
+                    .with_cursor(7)
+                    .with_pwd(cfg.pwd.as_str()),
+            )?
         );
 
         Ok(())

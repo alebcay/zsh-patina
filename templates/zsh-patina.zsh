@@ -149,6 +149,9 @@ _zsh_patina() {
             header="${header}YKA=1"$'\n'"YKS=$YANK_START"$'\n'"YKE=$YANK_END"$'\n'"YKH=$REPLY"$'\n'
         fi
 
+        if [[ -o autocd ]]; then
+            header="${header}ACD=1"$'\n'
+        fi
         if [[ ! -o banghist ]]; then
             header="${header}BNG=0"$'\n'
         fi

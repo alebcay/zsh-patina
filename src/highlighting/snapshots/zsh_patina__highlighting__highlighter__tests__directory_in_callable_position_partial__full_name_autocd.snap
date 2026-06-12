@@ -1,0 +1,7 @@
+---
+source: src/highlighting/highlighter.rs
+expression: "cfg.highlight_with_request(\"mydir\",\nHighlightingRequest::default().with_autocd(true).with_pwd(cfg.pwd.as_str()),)?"
+---
+mydir
+
+0  5  `mydir`  variable.function + dynamic.callable.command

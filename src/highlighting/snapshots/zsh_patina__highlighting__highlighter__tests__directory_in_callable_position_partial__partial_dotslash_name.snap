@@ -1,0 +1,7 @@
+---
+source: src/highlighting/highlighter.rs
+expression: "cfg.highlight_with_request(\"./myd\",\nHighlightingRequest::default().with_autocd(false).with_pwd(cfg.pwd.as_str()),)?"
+---
+./myd
+
+0  5  `./myd`  CALLABLE `./myd`

@@ -96,18 +96,22 @@ pub fn path_type(path: &str, pwd: &str, partial: bool) -> Option<(PathType, bool
     })
 }
 
-/// Check if the given path is an executable file.
+/// Check if the given path is an executable file/directory.
 /// * If the path is relative, it is resolved against the provided `pwd`.
-/// * If the path is a directory, it is only considered executable if it
+/// * If `autocd` is `true` and the path is a directory, it is considered
+///   executable when it is referenced by its bare name, mirroring Zsh's
+///   `AUTO_CD` option.
+/// * Otherwise, if path is a directory, it is only considered executable if it
 ///   ends with a slash or if it starts with one of '/', "./", "../".
-pub fn is_path_executable(path: &str, pwd: &str) -> bool {
+pub fn is_path_executable(path: &str, pwd: &str, autocd: bool) -> bool {
     let Some(metadata) = metadata(path, pwd) else {
         return false;
     };
     let is_executable = (metadata.permissions().mode() & 0o111) != 0;
     if metadata.is_dir() {
         is_executable
-            && (path.ends_with('/')
+            && (autocd
+                || path.ends_with('/')
                 || path.starts_with('/')
                 || path.starts_with("./")
                 || path.starts_with("../"))
@@ -244,7 +248,7 @@ mod tests {
         fs::write(&file_path, "#!/bin/sh").unwrap();
         fs::set_permissions(&file_path, Permissions::from_mode(0o755)).unwrap();
 
-        assert!(is_path_executable(file_path.to_str().unwrap(), "/"));
+        assert!(is_path_executable(file_path.to_str().unwrap(), "/", false));
     }
 
     #[test]
@@ -254,7 +258,23 @@ mod tests {
         fs::write(&file_path, "hello").unwrap();
         fs::set_permissions(&file_path, Permissions::from_mode(0o644)).unwrap();
 
-        assert!(!is_path_executable(file_path.to_str().unwrap(), "/"));
+        assert!(!is_path_executable(file_path.to_str().unwrap(), "/", false));
+    }
+
+    #[test]
+    fn is_path_executable_non_executable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("noexecdir");
+        fs::create_dir(&sub).unwrap();
+        fs::set_permissions(&sub, Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!is_path_executable(sub.to_str().unwrap(), "/", false));
+
+        let pwd = dir.path().to_str().unwrap();
+        assert!(!is_path_executable("noexecdir/", pwd, false));
+        assert!(!is_path_executable("./noexecdir", pwd, false));
+        assert!(!is_path_executable("./noexecdir/", pwd, false));
+        assert!(!is_path_executable("noexecdir", pwd, false));
     }
 
     #[test]
@@ -265,23 +285,53 @@ mod tests {
 
         let path = sub.to_str().unwrap();
         assert!(path.starts_with('/'));
-        assert!(is_path_executable(path, "/"));
+        assert!(is_path_executable(path, "/", false));
 
-        assert!(is_path_executable("../mydir", path));
-        assert!(!is_path_executable("../mydir2", path));
+        assert!(is_path_executable("../mydir", path, false));
+        assert!(!is_path_executable("../mydir2", path, false));
 
         let pwd = dir.path().to_str().unwrap();
-        assert!(!is_path_executable("mydir", pwd));
-        assert!(is_path_executable("mydir/", pwd));
-        assert!(!is_path_executable("mydir2/", pwd));
-        assert!(is_path_executable("./mydir", pwd));
-        assert!(!is_path_executable("./mydir2", pwd));
-        assert!(is_path_executable("./mydir/", pwd));
-        assert!(!is_path_executable("./mydir2/", pwd));
+        assert!(!is_path_executable("mydir", pwd, false));
+        assert!(is_path_executable("mydir/", pwd, false));
+        assert!(!is_path_executable("mydir2/", pwd, false));
+        assert!(is_path_executable("./mydir", pwd, false));
+        assert!(!is_path_executable("./mydir2", pwd, false));
+        assert!(is_path_executable("./mydir/", pwd, false));
+        assert!(!is_path_executable("./mydir2/", pwd, false));
     }
 
     #[test]
     fn is_path_executable_nonexistent() {
-        assert!(!is_path_executable("/no/such/path", "/"));
+        assert!(!is_path_executable("/no/such/path", "/", false));
+    }
+
+    /// When `autocd` is enabled, a bare directory name (no prefix) is
+    /// considered executable. Files and nonexistent paths are unaffected.
+    #[test]
+    fn is_path_executable_autocd() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("mydir");
+        fs::create_dir(&sub).unwrap();
+        let file_path = dir.path().join("script.sh");
+        fs::write(&file_path, "#!/bin/sh").unwrap();
+        fs::set_permissions(&file_path, Permissions::from_mode(0o755)).unwrap();
+
+        let pwd = dir.path().to_str().unwrap();
+
+        assert!(is_path_executable("mydir", pwd, true));
+        assert!(!is_path_executable("mydir", pwd, false));
+
+        assert!(is_path_executable("mydir/", pwd, true));
+        assert!(is_path_executable("./mydir", pwd, true));
+
+        assert!(!is_path_executable("nodir", pwd, true));
+
+        assert!(is_path_executable("script.sh", pwd, true));
+
+        let file_path2 = dir.path().join("readme.txt");
+        fs::write(&file_path2, "hello").unwrap();
+        fs::set_permissions(&file_path2, Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!is_path_executable("readme.txt", pwd, true));
     }
 }
