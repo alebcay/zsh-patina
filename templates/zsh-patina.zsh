@@ -80,7 +80,7 @@ _zsh_patina() {
 
     # remove tokens we have set earlier - do not clear the whole array as this
     # might reset syntax highlighting from other plugins (e.g. auto suggestions)
-    region_highlight=( ${region_highlight:#*memo=zsh_patina} )
+    region_highlight=( "${region_highlight[@]:#*memo=zsh_patina}" )
 
     # return immediately if both pre-buffer and buffer are empty
     [[ -z "$PREBUFFER" && -z "$BUFFER" ]] && return
@@ -123,7 +123,7 @@ _zsh_patina() {
         # rather than right at activation, makes sure we get the actual
         # directory the user has started in and not the one from which
         # `zsh-patina activate` was called.
-        _zsh_patina_encode_string $PWD
+        _zsh_patina_encode_string "$PWD"
         _ZSH_PATINA_ENCODED_PWD=$REPLY
     fi
 
@@ -157,7 +157,7 @@ _zsh_patina() {
         fi
 
         # send header
-        print -r -- $header
+        print -r -- "$header"
 
         # send pre-buffer lines
         if (( pre_count != 0 )); then
@@ -168,7 +168,7 @@ _zsh_patina() {
         if (( count != 0 )); then
             print -r -- "$BUFFER"
         fi
-    } >&$fd || {
+    } >&"$fd" || {
         print -u2 "zsh-patina: Write to socket failed"
         exec {fd}>&-
         return
@@ -182,7 +182,7 @@ _zsh_patina() {
 
     local new_regions=("${region_highlight[@]}") # preserve existing highlighting
     local line
-    while IFS= read -r -u $fd line; do
+    while IFS= read -r -u "$fd" line; do
         [[ -z "$line" ]] && continue
 
         if [[ "$line" == "?"* ]]; then
@@ -190,7 +190,7 @@ _zsh_patina() {
             query_cmd="${line#?CMD=}"
             query_lns=0
             query_las=1
-            while IFS= read -r -u $fd qline; do
+            while IFS= read -r -u "$fd" qline; do
                 [[ -z "$qline" ]] && break
                 if [[ "$qline" == "LNS="* ]]; then
                     query_lns="${qline#LNS=}"
@@ -201,15 +201,15 @@ _zsh_patina() {
 
             if [[ "$query_cmd" == "CAL" ]]; then
                 for (( qi = 0; qi < query_lns; qi++ )); do
-                    IFS= read -r -u $fd qline
+                    IFS= read -r -u "$fd" qline
                     _zsh_patina_decode_string "$qline"
-                    _zsh_patina_resolve_callable "$REPLY" $query_las
-                    print -r -u $fd -- "$REPLY"
+                    _zsh_patina_resolve_callable "$REPLY" "$query_las"
+                    print -r -u "$fd" -- "$REPLY"
                 done
             else
                 # unknown query type: drain body lines to keep socket in sync
                 for (( qi = 0; qi < query_lns; qi++ )); do
-                    IFS= read -r -u $fd qline
+                    IFS= read -r -u "$fd" qline
                 done
             fi
         else
@@ -232,7 +232,7 @@ _zsh_patina() {
 
 # store and update the current working directory in an encoded form
 _zsh_patina_chpwd() {
-    _zsh_patina_encode_string $PWD
+    _zsh_patina_encode_string "$PWD"
     _ZSH_PATINA_ENCODED_PWD=$REPLY
 }
 
