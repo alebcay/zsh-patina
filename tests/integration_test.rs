@@ -129,6 +129,7 @@ async fn run_highlight(
     let zsh_script = format!(
         r#"{before_activate}
         eval "$(zsh-patina activate)"
+        typeset -g -a region_highlight  # ensure region_highlight exists globally
         BUFFER="{previous_buffer}"; {highlight_loop}
         {after_activate}
         BUFFER="{buffer}"; {highlight_loop}
