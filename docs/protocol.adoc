@@ -37,6 +37,15 @@ Integers in this document are non-negative decimal integers unless stated otherw
 
 The ABNF syntax used in this document is defined in RFC 5234. 
 
+[[versioning]]
+== Protocol Version Number
+
+The version number carried in the `VER` header field (see <<request-metadata>>) identifies the major revision of this protocol. The current version is `2`.
+
+The version number is a major version only. New fields, commands, or response lines MAY be added to this specification without incrementing the version number, provided the addition is backwards-compatible. An addition is considered backwards-compatible if a sender transmitting the new information to a receiver that does not implement it causes no degradation of existing functionality--that is, the receiver silently ignores the unknown element. Similarly, the sender transmitting the new information MUST NOT be affected by the receiver ignoring it.
+
+The version number MUST be incremented whenever a breaking change is introduced. A breaking change is any modification that causes a conforming implementation of the prior version to misinterpret, reject, or fail to produce a correct result when interacting with an implementation of the new version.
+
 [[transport]]
 == Transport
 
