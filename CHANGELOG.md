@@ -2,6 +2,24 @@
 
 _Note: This project follows [Semantic Versioning]._
 
+## [1.8.0] - 2026-06-14
+
+**New features**
+
+- Add support for the Zsh `AUTO_CD` option. If this option is enabled, directories in callable position will now be correctly highlighted.
+- Improve performance by skipping highlighting if there are bytes pending for input. This can happen when pasting from the clipboard or when positioning the cursor with Alt+Click/Option+Click, for example.
+- Improve performance by merging similar regular expressions in the Zsh syntax definition
+- Refactor client-daemon protocol for increased performance and maintainability
+
+**Bug fixes**
+
+- Quote parameters to protect against the `SH_WORD_SPLIT` option being enabled
+
+**Maintenance**
+
+- Update dependencies
+- Only run build script if syntax definition has changed
+
 ## [1.7.0] - 2026-05-17
 
 **New features**
@@ -169,6 +187,7 @@ _Note: This project follows [Semantic Versioning]._
 
 _First release._
 
+[1.8.0]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.8.0
 [1.7.0]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.7.0
 [1.6.0]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.6.0
 [1.5.1]: https://github.com/michel-kraemer/zsh-patina/releases/tag/1.5.1
