@@ -10,7 +10,7 @@ homepage = "https://github.com/michel-kraemer/zsh-patina"
 repository = "https://github.com/michel-kraemer/zsh-patina"
 keywords = ["shell", "zsh", "syntax", "highlighting", "syntax-highlighting"]
 categories = ["command-line-utilities"]
-rust-version = "1.88"
+rust-version = "1.89"
 
 [profile.release-lto]
 inherits = "release"

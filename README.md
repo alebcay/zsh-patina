@@ -219,7 +219,7 @@ zsh-patina runs on Windows via [MSYS2](https://www.msys2.org/) or [Cygwin](https
 
 ### Build from source (for the brave ones)
 
-**Prerequisites:** To build the plugin, you need to have [Rust](https://rust-lang.org/) 1.88.0 or higher on your system. The easiest way to install Rust is through [rustup](https://rustup.rs/).
+**Prerequisites:** To build the plugin, you need to have [Rust](https://rust-lang.org/) 1.89.0 or higher on your system. The easiest way to install Rust is through [rustup](https://rustup.rs/).
 
 1. Clone the repository:
 
