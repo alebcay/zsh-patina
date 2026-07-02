@@ -314,8 +314,8 @@ fn check_activate_in_zshrc(active_in_current_shell: bool) -> Result<(String, Mes
 }
 
 /// Check if the daemon is running
-fn check_daemon(runtime_dir: &Path) -> (String, MessageType) {
-    match is_daemon_running(runtime_dir) {
+fn check_daemon(runtime_dir: &Path) -> Result<(String, MessageType)> {
+    Ok(match is_daemon_running(runtime_dir)? {
         Some(pid) => (
             format!("Daemon is running. PID {pid}."),
             MessageType::Success,
@@ -324,7 +324,7 @@ fn check_daemon(runtime_dir: &Path) -> (String, MessageType) {
             "Daemon is stopped or PID file could not be accessed.".to_string(),
             MessageType::Error,
         ),
-    }
+    })
 }
 
 pub fn check(
@@ -376,7 +376,7 @@ pub fn check(
     }
     print_bullet(&msg, t);
 
-    let (msg, t) = check_daemon(runtime_dir);
+    let (msg, t) = check_daemon(runtime_dir)?;
     match t {
         MessageType::Error => has_errors = true,
         MessageType::Warning => has_warnings = true,

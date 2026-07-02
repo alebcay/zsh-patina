@@ -4,8 +4,8 @@ use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     borrow::Cow,
-    fs::{self, Permissions},
-    io::{BufRead, BufReader, Write, stdout},
+    fs::{self, File, OpenOptions, Permissions, TryLockError},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write, stdout},
     os::{
         fd::AsRawFd,
         unix::{
@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     process,
     sync::Arc,
+    thread,
     time::Duration,
 };
 
@@ -49,8 +50,13 @@ struct ActivateTemplate {
     version: &'static str,
 }
 
+#[deprecated = "This function is only needed for backwards compatibility. It will be removed in a future release."]
 fn pid_path(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join("daemon.pid")
+}
+
+fn lock_path(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("daemon.lock")
 }
 
 fn sock_path(runtime_dir: &Path) -> PathBuf {
@@ -59,11 +65,76 @@ fn sock_path(runtime_dir: &Path) -> PathBuf {
 
 /// Read the PID from the PID file. Returns `None` if the file does not exist or
 /// contains garbage.
-fn read_pid(pid_file: &Path) -> Option<u32> {
+fn read_pid_legacy(pid_file: &Path) -> Option<u32> {
     fs::read_to_string(pid_file).ok()?.trim().parse().ok()
 }
 
+// Total amount of time we are willing to wait for another daemon process to
+// finish a short-lived initialization step. This is only relevant when multiple
+// shells start around the same time; the startup race is prevented by the lock
+// file, but the winner may not have completed these steps yet.
+const LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(1000);
+
+// Polling interval used while waiting for the daemon to finish initialization.
+const LOCK_WAIT_INTERVAL: Duration = Duration::from_millis(50);
+
+fn read_pid(pid_file: &mut File) -> Result<u32> {
+    let deadline = std::time::Instant::now() + LOCK_WAIT_TIMEOUT;
+    loop {
+        pid_file.seek(SeekFrom::Start(0))?;
+        let mut pid = String::new();
+        pid_file.read_to_string(&mut pid)?;
+        let pid = pid.trim();
+        if !pid.is_empty() {
+            return pid.parse().context("Could not parse PID from lock file");
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!("Daemon is running but current PID could not be read");
+        }
+        thread::sleep(LOCK_WAIT_INTERVAL);
+    }
+}
+
+/// Connect to the daemon's Unix domain socket, retrying if the socket does not
+/// exist yet. This handles the short window after a new daemon has acquired the
+/// startup lock but has not finished binding the socket.
+fn connect_with_retry(socket_path: &Path) -> Result<UnixStream> {
+    let deadline = std::time::Instant::now() + LOCK_WAIT_TIMEOUT;
+    loop {
+        match UnixStream::connect(socket_path) {
+            Ok(stream) => return Ok(stream),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(e.into());
+                }
+                thread::sleep(LOCK_WAIT_INTERVAL);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Wait until the exclusive lock on `lock_file` can be acquired or the timeout
+/// expires. Returns an error if the lock is still held when the timeout is
+/// reached.
+fn wait_for_lock_release(lock_file: &mut File) -> Result<()> {
+    let deadline = std::time::Instant::now() + LOCK_WAIT_TIMEOUT;
+    loop {
+        match lock_file.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    bail!("Daemon did not release the lock file in time");
+                }
+                thread::sleep(LOCK_WAIT_INTERVAL);
+            }
+            Err(TryLockError::Error(e)) => return Err(e.into()),
+        }
+    }
+}
+
 /// Check whether a process with the given PID is currently alive.
+#[deprecated = "This function is only needed for backwards compatibility. It will be removed in a future release."]
 fn pid_alive(pid: u32) -> bool {
     // SAFETY: This is safe because we're only passing a valid PID and a signal
     // of 0, which does not actually send a signal. kill(pid, 0) returns 0 if
@@ -1200,7 +1271,7 @@ pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
         // Check the currently running daemon's version. Restart it if the
         // versions don't match.
         let socket_path = sock_path(runtime_dir);
-        let mut stream = UnixStream::connect(&socket_path)?;
+        let mut stream = connect_with_retry(&socket_path)?;
 
         let timeout = Duration::from_secs(2);
         stream.set_read_timeout(Some(timeout))?;
@@ -1219,7 +1290,7 @@ pub fn activate(runtime_dir: &Path, config: &Config) -> Result<()> {
 
         if daemon_version.is_none_or(|v| v != our_version) {
             // restart daemon
-            stop_daemon(runtime_dir);
+            stop_daemon(runtime_dir)?;
             start_daemon(runtime_dir, config, false)?;
         }
     }
@@ -1237,21 +1308,50 @@ fn start_daemon_internal(
     config: &Config,
     no_daemon: bool,
 ) -> Result<(Role, bool)> {
-    let pid_file = pid_path(runtime_dir);
-
-    if let Some(pid) = read_pid(&pid_file)
-        && pid_alive(pid)
+    // legacy path for backwards compatibility
     {
-        if no_daemon {
-            println!("Daemon is already running. PID {pid}.");
-        }
+        let pid_file = pid_path(runtime_dir);
 
-        // daemon is already running
-        return Ok((Role::Parent, true));
+        if let Some(pid) = read_pid_legacy(&pid_file) {
+            if pid_alive(pid) {
+                if no_daemon {
+                    println!("Daemon is already running. PID {pid}.");
+                }
+
+                // legacy daemon is already running
+                return Ok((Role::Parent, true));
+            } else {
+                // remove the stale legacy file and fall through
+                let _ = fs::remove_file(pid_file);
+            }
+        }
     }
 
-    // Make sure the data directory exists
+    // Make sure the data directory exists before we create/open the lock file
     fs::create_dir_all(runtime_dir).context("Unable to create data directory")?;
+
+    // open lock file and acquire an exclusive lock on it
+    let lock_file_path = lock_path(runtime_dir);
+    let mut lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_file_path)?;
+    match lock_file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            if no_daemon {
+                let pid = read_pid(&mut lock_file)
+                    .context("Daemon is already running but current PID could not be read")?;
+                println!("Daemon is already running. PID {pid}.");
+            }
+
+            // daemon is already running
+            return Ok((Role::Parent, true));
+        }
+        Err(TryLockError::Error(e)) => return Err(e.into()),
+    }
 
     if !no_daemon {
         // Double-fork:
@@ -1322,14 +1422,16 @@ fn start_daemon_internal(
     }
 
     // write our PID so that `stop` and `status` can find us
-    let my_pid = process::id();
-    fs::write(&pid_file, format!("{my_pid}\n"))
-        .with_context(|| format!("Unable to write PID file {pid_file:?}"))?;
+    lock_file.set_len(0)?;
+    lock_file.seek(SeekFrom::Start(0))?;
+    writeln!(lock_file, "{}", process::id())?;
+    lock_file.flush()?;
 
-    // Set read/write permissions and protect PID file from being deleted by
+    // Set read/write permissions and protect lock file from being deleted by
     // periodic cleanup (https://specifications.freedesktop.org/basedir/latest/).
-    fs::set_permissions(&pid_file, Permissions::from_mode(0o1600))
-        .with_context(|| format!("Unable to set permissions of {pid_file:?}"))?;
+    lock_file
+        .set_permissions(Permissions::from_mode(0o1600))
+        .with_context(|| format!("Unable to set permissions of {lock_file_path:?}"))?;
 
     // clean up leftover socket
     let socket_path = sock_path(runtime_dir);
@@ -1403,29 +1505,90 @@ fn start_daemon_internal(
         }
     }
 
-    let _ = fs::remove_file(pid_file);
+    // always remove socket before lock file to avoid a possible race condition
     let _ = fs::remove_file(socket_path);
+    let _ = fs::remove_file(lock_file_path);
 
     Ok((Role::Daemon, false))
 }
 
-pub fn stop_daemon(runtime_dir: &Path) {
+#[deprecated = "This function is only needed for backwards compatibility. It will be removed in a future release."]
+#[allow(deprecated)]
+fn stop_daemon_legacy(runtime_dir: &Path) -> bool {
     let pid_file = pid_path(runtime_dir);
-    if let Some(pid) = read_pid(&pid_file)
+    if let Some(pid) = read_pid_legacy(&pid_file)
         && pid_alive(pid)
     {
         // SAFETY: `pid` is known to be running. SIGTERM is a valid signal
         // number.
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
 
-        let _ = fs::remove_file(pid_file);
         let _ = fs::remove_file(sock_path(runtime_dir));
+        let _ = fs::remove_file(pid_file);
+
+        true
+    } else {
+        false
     }
 }
 
-pub fn is_daemon_running(runtime_dir: &Path) -> Option<u32> {
+pub fn stop_daemon(runtime_dir: &Path) -> Result<()> {
+    if stop_daemon_legacy(runtime_dir) {
+        return Ok(());
+    }
+
+    // open lock file and try to acquire an exclusive lock
+    let lock_file_path = lock_path(runtime_dir);
+    let mut lock_file = match OpenOptions::new()
+        .read(true)
+        .write(true) // required to obtain exclusive lock
+        .open(&lock_file_path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // lock file does not exist - daemon is not running
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    match lock_file.try_lock() {
+        Ok(()) => {
+            // lock file exists but it is not locked, which means it is stale
+            // and the daemon is not running
+            Ok(())
+        }
+
+        Err(TryLockError::WouldBlock) => {
+            // daemon is running - read PID
+            let pid = read_pid(&mut lock_file)?;
+
+            // SAFETY: `pid` is known to be running. SIGTERM is a valid signal
+            // number.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+
+            // Remove the socket immediately so no new client connects to a
+            // daemon that is about to shut down. Keep the lock file on disk:
+            // the daemon still holds the lock and will remove the file when it
+            // exits. Leaving it in place also blocks any concurrent starter
+            // from creating a new lock inode until the old daemon is gone.
+            let _ = fs::remove_file(sock_path(runtime_dir));
+
+            // wait for the daemon to release the lock file
+            wait_for_lock_release(&mut lock_file)?;
+
+            Ok(())
+        }
+
+        Err(TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+#[deprecated = "This function is only needed for backwards compatibility. It will be removed in a future release."]
+#[allow(deprecated)]
+fn is_daemon_running_legacy(runtime_dir: &Path) -> Option<u32> {
     let pid_file = pid_path(runtime_dir);
-    if let Some(pid) = read_pid(&pid_file)
+    if let Some(pid) = read_pid_legacy(&pid_file)
         && pid_alive(pid)
     {
         Some(pid)
@@ -1434,8 +1597,42 @@ pub fn is_daemon_running(runtime_dir: &Path) -> Option<u32> {
     }
 }
 
+pub fn is_daemon_running(runtime_dir: &Path) -> Result<Option<u32>> {
+    if let Some(pid) = is_daemon_running_legacy(runtime_dir) {
+        return Ok(Some(pid));
+    }
+
+    // open lock file and try to acquire an exclusive lock
+    let lock_file_path = lock_path(runtime_dir);
+    let mut lock_file = match OpenOptions::new()
+        .read(true)
+        .write(true) // required to obtain exclusive lock
+        .open(&lock_file_path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // lock file does not exist - daemon is not running
+            return Ok(None);
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    match lock_file.try_lock() {
+        Ok(()) => {
+            // lock file exists but it is not locked, which means it is stale and
+            // the daemon is not running
+            Ok(None)
+        }
+        Err(TryLockError::WouldBlock) => {
+            // daemon is running - return PID
+            read_pid(&mut lock_file).map(Some)
+        }
+        Err(TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
 pub fn status_daemon(runtime_dir: &Path) -> Result<()> {
-    if let Some(pid) = is_daemon_running(runtime_dir) {
+    if let Some(pid) = is_daemon_running(runtime_dir)? {
         println!("Daemon is running. PID {pid}.");
         Ok(())
     } else {

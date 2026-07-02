@@ -171,11 +171,11 @@ fn run() -> Result<()> {
         Command::Completion { output_file } => completion(output_file.as_deref()),
         Command::Start { no_daemon } => start_daemon(&runtime_dir, &config, no_daemon),
         Command::Stop => {
-            stop_daemon(&runtime_dir);
+            stop_daemon(&runtime_dir)?;
             Ok(())
         }
         Command::Restart => {
-            stop_daemon(&runtime_dir);
+            stop_daemon(&runtime_dir)?;
             start_daemon(&runtime_dir, &config, false)
         }
         Command::Status => status_daemon(&runtime_dir),
