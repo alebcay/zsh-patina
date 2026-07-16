@@ -40,7 +40,6 @@ Besides normal static highlighting, zsh-patina is able to dynamically detect whe
 1. Install zsh-patina:
 
    ```shell
-   brew tap michel-kraemer/zsh-patina
    brew install zsh-patina
    ```
 
